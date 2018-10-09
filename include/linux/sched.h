@@ -34,6 +34,7 @@
 #include <linux/sched/prio.h>
 #include <linux/sched/types.h>
 #include <linux/signal_types.h>
+#include <linux/spinlock.h>
 #include <linux/syscall_user_dispatch_types.h>
 #include <linux/mm_types_task.h>
 #include <linux/task_io_accounting.h>
@@ -745,6 +746,12 @@ struct kmap_ctrl {
 #endif
 };
 
+enum blocked_on_state {
+	BO_RUNNABLE,
+	BO_BLOCKED,
+	BO_WAKING,
+};
+
 struct task_struct {
 #ifdef CONFIG_THREAD_INFO_IN_TASK
 	/*
@@ -1154,10 +1161,9 @@ struct task_struct {
 	struct rt_mutex_waiter		*pi_blocked_on;
 #endif
 
-#ifdef CONFIG_DEBUG_MUTEXES
-	/* Mutex deadlock detection: */
-	struct mutex_waiter		*blocked_on;
-#endif
+	enum blocked_on_state		blocked_on_state;
+	struct mutex			*blocked_on;	/* lock we're blocked on */
+	raw_spinlock_t			blocked_lock;
 
 #ifdef CONFIG_DEBUG_ATOMIC_SLEEP
 	int				non_block_count;
@@ -2112,6 +2118,49 @@ static inline bool preempt_model_rt(void)
 static inline bool preempt_model_preemptible(void)
 {
 	return preempt_model_full() || preempt_model_rt();
+}
+
+static inline void set_blocked_on_runnable(struct task_struct *p)
+{
+	unsigned long flags;
+
+	if (!sched_proxy_exec())
+		return;
+
+	raw_spin_lock_irqsave(&p->blocked_lock, flags);
+	if (p->blocked_on_state == BO_WAKING)
+		p->blocked_on_state = BO_RUNNABLE;
+	raw_spin_unlock_irqrestore(&p->blocked_lock, flags);
+}
+
+static inline void set_blocked_on_waking(struct task_struct *p)
+{
+	lockdep_assert_held(&p->blocked_lock);
+
+	if (p->blocked_on_state == BO_BLOCKED)
+		p->blocked_on_state = BO_WAKING;
+}
+
+static inline void set_task_blocked_on(struct task_struct *p, struct mutex *m)
+{
+	lockdep_assert_held(&p->blocked_lock);
+
+	/*
+	 * Check we are clearing values to NULL or setting NULL
+	 * to values to ensure we don't overwrite existing mutex
+	 * values or clear already cleared values
+	 */
+	WARN_ON((!m && !p->blocked_on) || (m && p->blocked_on));
+
+	p->blocked_on = m;
+	p->blocked_on_state = m ? BO_BLOCKED : BO_RUNNABLE;
+}
+
+static inline struct mutex *get_task_blocked_on(struct task_struct *p)
+{
+	lockdep_assert_held(&p->blocked_lock);
+
+	return p->blocked_on;
 }
 
 static __always_inline bool need_resched(void)
