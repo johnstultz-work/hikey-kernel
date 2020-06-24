@@ -623,8 +623,7 @@ __mutex_lock_common(struct mutex *lock, unsigned int state, unsigned int subclas
 			goto err_early_kill;
 	}
 
-	current->blocked_on = lock;
-	current->blocked_on_state = BO_BLOCKED;
+	set_task_blocked_on(current, lock);
 	set_current_state(state);
 	trace_contention_begin(lock, LCB_F_MUTEX);
 	for (;;) {
@@ -637,7 +636,7 @@ __mutex_lock_common(struct mutex *lock, unsigned int state, unsigned int subclas
 		 * the handoff.
 		 */
 		if (__mutex_trylock(lock))
-			goto acquired;
+			break; /* acquired */;
 
 		/*
 		 * Check for signals and kill conditions while holding
@@ -702,9 +701,7 @@ __mutex_lock_common(struct mutex *lock, unsigned int state, unsigned int subclas
 			trace_contention_begin(lock, LCB_F_MUTEX);
 		}
 	}
-acquired:
-	current->blocked_on = NULL;
-	current->blocked_on_state = BO_RUNNABLE;
+	set_task_blocked_on(current, NULL);
 	__set_current_state(TASK_RUNNING);
 
 	if (ww_ctx) {
@@ -736,12 +733,11 @@ skip_wait:
 	return 0;
 
 err:
-	current->blocked_on = NULL;
-	current->blocked_on_state = BO_RUNNABLE;
+	set_task_blocked_on(current, NULL);
 	__set_current_state(TASK_RUNNING);
 	__mutex_remove_waiter(lock, &waiter);
 err_early_kill:
-	WARN_ON(current->blocked_on);
+	WARN_ON(get_task_blocked_on(current));
 	trace_contention_end(lock, ret);
 	raw_spin_unlock(&current->blocked_lock);
 	raw_spin_unlock_irqrestore(&lock->wait_lock, flags);
@@ -954,8 +950,8 @@ static noinline void __sched __mutex_unlock_slowpath(struct mutex *lock, unsigne
 
 		raw_spin_lock(&next->blocked_lock);
 		debug_mutex_wake_waiter(lock, waiter);
-		WARN_ON(next->blocked_on != lock);
-		next->blocked_on_state = BO_WAKING;
+		WARN_ON(get_task_blocked_on(next) != lock);
+		set_blocked_on_waking(next);
 		wake_q_add(&wake_q, next);
 		raw_spin_unlock(&next->blocked_lock);
 	}

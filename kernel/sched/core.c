@@ -4226,7 +4226,6 @@ bool ttwu_state_match(struct task_struct *p, unsigned int state, int *success)
 int try_to_wake_up(struct task_struct *p, unsigned int state, int wake_flags)
 {
 	guard(preempt)();
-	unsigned long flags;
 	int cpu, success = 0;
 
 	if (p == current) {
@@ -4373,12 +4372,8 @@ int try_to_wake_up(struct task_struct *p, unsigned int state, int wake_flags)
 
 		ttwu_queue(p, cpu, wake_flags);
 	}
-	/* XXX can we do something better here for !CONFIG_SCHED_PROXY_EXEC case */
-	raw_spin_lock_irqsave(&p->blocked_lock, flags);
-	if (p->blocked_on_state == BO_WAKING)
-		p->blocked_on_state = BO_RUNNABLE;
-	raw_spin_unlock_irqrestore(&p->blocked_lock, flags);
 out:
+	set_blocked_on_runnable(p);
 	if (success)
 		ttwu_stat(p, task_cpu(p), wake_flags);
 
