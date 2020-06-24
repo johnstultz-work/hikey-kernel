@@ -623,8 +623,7 @@ __mutex_lock_common(struct mutex *lock, unsigned int state, unsigned int subclas
 			goto err_early_kill;
 	}
 
-	current->blocked_on = lock;
-	current->blocked_on_state = BO_BLOCKED;
+	set_task_blocked_on(current, lock);
 	set_current_state(state);
 	trace_contention_begin(lock, LCB_F_MUTEX);
 	for (;;) {
@@ -701,8 +700,7 @@ __mutex_lock_common(struct mutex *lock, unsigned int state, unsigned int subclas
 		}
 	}
 acquired:
-	current->blocked_on = NULL;
-	current->blocked_on_state = BO_RUNNABLE;
+	set_task_blocked_on(current, NULL);
 	__set_current_state(TASK_RUNNING);
 
 	if (ww_ctx) {
@@ -734,8 +732,7 @@ skip_wait:
 	return 0;
 
 err:
-	current->blocked_on = NULL;
-	current->blocked_on_state = BO_RUNNABLE;
+	set_task_blocked_on(current, NULL);
 	__set_current_state(TASK_RUNNING);
 	__mutex_remove_waiter(lock, &waiter);
 err_early_kill:
