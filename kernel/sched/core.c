@@ -2689,9 +2689,7 @@ int push_cpu_stop(void *arg)
 
 	// XXX validate p is still the highest prio task
 	if (task_rq(p) == rq) {
-		deactivate_task(rq, p, 0);
-		set_task_cpu(p, lowest_rq->cpu);
-		activate_task(lowest_rq, p, 0);
+		push_task_chain(rq, lowest_rq, p);
 		resched_curr(lowest_rq);
 	}
 
@@ -3864,6 +3862,179 @@ ttwu_do_activate(struct rq *rq, struct task_struct *p, int wake_flags,
 	}
 #endif
 }
+
+static inline bool task_queued_on_rq(struct rq *rq, struct task_struct *task)
+{
+	if (!task_on_rq_queued(task))
+		return false;
+	smp_rmb();
+	if (task_rq(task) != rq)
+		return false;
+	smp_rmb();
+	if (!task_on_rq_queued(task))
+		return false;
+	return true;
+}
+
+void push_task_chain(struct rq *rq, struct rq *dst_rq, struct task_struct *task)
+{
+	struct task_struct *owner;
+
+	lockdep_assert_rq_held(rq);
+	lockdep_assert_rq_held(dst_rq);
+
+	BUG_ON(!task_queued_on_rq(rq, task));
+	BUG_ON(task_current_selected(rq, task));
+
+	while (task) {
+		if (!task_queued_on_rq(rq, task) || task_current_selected(rq, task))
+			break;
+
+		if (task_is_blocked(task))
+			owner = __mutex_owner(task->blocked_on);
+		else
+			owner = NULL;
+
+		deactivate_task(rq, task, 0);
+		set_task_cpu(task, dst_rq->cpu);
+		activate_task(dst_rq, task, 0);
+		if (task == owner)
+			break;
+		task = owner;
+	}
+}
+
+/*
+ * Returns the unblocked task at the end of the blocked chain starting with p
+ * if that chain is composed entirely of tasks enqueued on rq, or NULL otherwise.
+ */
+struct task_struct *find_exec_ctx(struct rq *rq, struct task_struct *p)
+{
+	struct task_struct *exec_ctx, *owner;
+	struct mutex *mutex;
+
+	lockdep_assert_rq_held(rq);
+
+	for (exec_ctx = p; task_is_blocked(exec_ctx) && !task_on_cpu(rq, exec_ctx);
+							exec_ctx = owner) {
+		mutex = exec_ctx->blocked_on;
+		owner = __mutex_owner(mutex);
+		if (owner == exec_ctx)
+			break;
+
+		if (!task_queued_on_rq(rq, owner) || task_current_selected(rq, owner)) {
+			exec_ctx = NULL;
+			break;
+		}
+	}
+	return exec_ctx;
+}
+
+/*
+ * Returns:
+ * 1 if chain is pushable and affinity does not prevent pushing to cpu
+ * 0 if chain is unpushable
+ * -1 if chain is pushable but affinity blocks running on cpu.
+ */
+int pushable_chain(struct rq *rq, struct task_struct *p, int cpu)
+{
+	struct task_struct *exec_ctx;
+
+	lockdep_assert_rq_held(rq);
+
+	if (task_rq(p) != rq || !task_on_rq_queued(p))
+		return 0;
+
+	exec_ctx = find_exec_ctx(rq, p);
+	/*
+	 * Chain leads off the rq, we're free to push it anywhere.
+	 *
+	 * One wrinkle with relying on find_exec_ctx is that when the chain
+	 * leads to a task currently migrating to rq, we see the chain as
+	 * pushable & push everything prior to the migrating task. Even if
+	 * we checked explicitly for this case, we could still race with a
+	 * migration after the check.
+	 * This shouldn't permanently produce a bad state though, as proxy()
+	 * will send the chain back to rq and by that point the migration
+	 * should be complete & a proper push can occur.
+	 */
+	if (!exec_ctx)
+		return 1;
+
+	if (task_on_cpu(rq, exec_ctx) || exec_ctx->nr_cpus_allowed <= 1)
+		return 0;
+
+	return cpumask_test_cpu(cpu, &exec_ctx->cpus_mask) ? 1 : -1;
+}
+
+#ifdef CONFIG_PROXY_EXEC
+bool ttwu_proxy_skip_wakeup(struct rq *rq, struct task_struct *p)
+{
+	if (task_current(rq, p)) {
+		bool ret = true;
+
+		raw_spin_lock(&p->blocked_lock);
+		if (task_is_blocked(p) && __mutex_owner(p->blocked_on) == p)
+			p->blocked_on_waking = true;
+		if (!task_is_blocked(p))
+			ret = false;
+		raw_spin_unlock(&p->blocked_lock);
+		return ret;
+	}
+
+	/*
+	 * Since we don't dequeue for blocked-on relations, we'll always
+	 * trigger the on_rq_queued() clause for them.
+	 */
+	if (task_is_blocked(p)) {
+		raw_spin_lock(&p->blocked_lock);
+
+		if (!p->blocked_on || __mutex_owner(p->blocked_on) != p) {
+			/*
+			 * p already woke, ran and blocked on another mutex.
+			 * Since a successful wakeup already happened, we're
+			 * done.
+			 */
+			raw_spin_unlock(&p->blocked_lock);
+			return true;
+		}
+		p->blocked_on_waking = true;
+
+		if (!cpumask_test_cpu(cpu_of(rq), p->cpus_ptr)) {
+			/*
+			 * proxy stuff moved us outside of the affinity mask
+			 * 'sleep' now and fail the direct wakeup so that the
+			 * normal wakeup path will fix things.
+			 */
+			deactivate_task(rq, p, DEQUEUE_SLEEP | DEQUEUE_NOCLOCK);
+			if (task_current_selected(rq, p)) {
+				/*
+				 * If p is the proxy, then remove lingering
+				 * references to it from rq and sched_class structs after
+				 * dequeueing.
+				 */
+				put_prev_task(rq, p);
+				rq_set_selected(rq, rq->idle);
+			}
+			resched_curr(rq);
+			raw_spin_unlock(&p->blocked_lock);
+			return true;
+		}
+		/*
+		 * Must resched after killing a blocked_on relation. The currently
+		 * executing context might not be the most elegible anymore.
+		 */
+		resched_curr(rq);
+		raw_spin_unlock(&p->blocked_lock);
+	}
+	return false;
+}
+#else
+static inline bool ttwu_proxy_skip_wakeup(struct rq *rq, struct task_struct *p)
+{
+	return false;
+}
+#endif
 
 /*
  * Consider @p being inside a wait loop:
