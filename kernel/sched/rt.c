@@ -1600,7 +1600,7 @@ static void yield_task_rt(struct rq *rq)
 }
 
 #ifdef CONFIG_SMP
-static int find_lowest_rq(struct task_struct *task);
+static int find_lowest_rq(struct task_struct *sched_ctx, struct task_struct *exec_ctx);
 
 static int
 select_task_rq_rt(struct task_struct *p, int cpu, int flags)
@@ -1650,7 +1650,7 @@ select_task_rq_rt(struct task_struct *p, int cpu, int flags)
 	       (curr->nr_cpus_allowed < 2 || selected->prio <= p->prio);
 
 	if (test || !rt_task_fits_capacity(p, cpu)) {
-		int target = find_lowest_rq(p);
+		int target = find_lowest_rq(p, p);
 
 		/*
 		 * Bail out if we were forcing a migration to find a better
@@ -1677,8 +1677,18 @@ out:
 
 static void check_preempt_equal_prio(struct rq *rq, struct task_struct *p)
 {
+	struct task_struct *exec_ctx = p;
+	/*
+	 * Current can't be migrated, useless to reschedule,
+	 * let's hope p can move out.
+	 */
 	if (rq->curr->nr_cpus_allowed == 1 ||
-	    !cpupri_find(&rq->rd->cpupri, rq_selected(rq), NULL))
+	    !cpupri_find(&rq->rd->cpupri, rq_selected(rq), rq->curr, NULL))
+		return;
+
+	/* No reason to preempt since rq->curr wouldn't change anyway */
+	exec_ctx = find_exec_ctx(rq, p);
+	if (task_current(rq, exec_ctx))
 		return;
 
 	/*
@@ -1686,7 +1696,7 @@ static void check_preempt_equal_prio(struct rq *rq, struct task_struct *p)
 	 * see if it is pushed or pulled somewhere else.
 	 */
 	if (p->nr_cpus_allowed != 1 &&
-	    cpupri_find(&rq->rd->cpupri, p, NULL))
+	    cpupri_find(&rq->rd->cpupri, p, exec_ctx, NULL))
 		return;
 
 	/*
@@ -1857,15 +1867,6 @@ static void put_prev_task_rt(struct rq *rq, struct task_struct *p)
 /* Only try algorithms three times */
 #define RT_MAX_TRIES 3
 
-static int pick_rt_task(struct rq *rq, struct task_struct *p, int cpu)
-{
-	if (!task_on_cpu(rq, p) &&
-	    cpumask_test_cpu(cpu, &p->cpus_mask))
-		return 1;
-
-	return 0;
-}
-
 /*
  * Return the highest pushable rq's task, which is suitable to be executed
  * on the CPU, NULL otherwise
@@ -1879,7 +1880,7 @@ static struct task_struct *pick_highest_pushable_task(struct rq *rq, int cpu)
 		return NULL;
 
 	plist_for_each_entry(p, head, pushable_tasks) {
-		if (pick_rt_task(rq, p, cpu))
+		if (pushable_chain(rq, p, cpu) == 1)
 			return p;
 	}
 
@@ -1888,19 +1889,19 @@ static struct task_struct *pick_highest_pushable_task(struct rq *rq, int cpu)
 
 static DEFINE_PER_CPU(cpumask_var_t, local_cpu_mask);
 
-static int find_lowest_rq(struct task_struct *task)
+static int find_lowest_rq(struct task_struct *sched_ctx, struct task_struct *exec_ctx)
 {
 	struct sched_domain *sd;
 	struct cpumask *lowest_mask = this_cpu_cpumask_var_ptr(local_cpu_mask);
 	int this_cpu = smp_processor_id();
-	int cpu      = task_cpu(task);
+	int cpu      = task_cpu(sched_ctx);
 	int ret;
 
 	/* Make sure the mask is initialized first */
 	if (unlikely(!lowest_mask))
 		return -1;
 
-	if (task->nr_cpus_allowed == 1)
+	if (exec_ctx && exec_ctx->nr_cpus_allowed == 1)
 		return -1; /* No other targets possible */
 
 	/*
@@ -1909,13 +1910,13 @@ static int find_lowest_rq(struct task_struct *task)
 	 */
 	if (sched_asym_cpucap_active()) {
 
-		ret = cpupri_find_fitness(&task_rq(task)->rd->cpupri,
-					  task, lowest_mask,
+		ret = cpupri_find_fitness(&task_rq(sched_ctx)->rd->cpupri,
+					  sched_ctx, exec_ctx, lowest_mask,
 					  rt_task_fits_capacity);
 	} else {
 
-		ret = cpupri_find(&task_rq(task)->rd->cpupri,
-				  task, lowest_mask);
+		ret = cpupri_find(&task_rq(sched_ctx)->rd->cpupri,
+				  sched_ctx, exec_ctx, lowest_mask);
 	}
 
 	if (!ret)
@@ -1979,15 +1980,45 @@ static int find_lowest_rq(struct task_struct *task)
 	return -1;
 }
 
+static struct task_struct *pick_next_pushable_task(struct rq *rq)
+{
+	struct plist_head *head = &rq->rt.pushable_tasks;
+	struct task_struct *p, *push_task = NULL;
+
+	if (!has_pushable_tasks(rq))
+		return NULL;
+
+	plist_for_each_entry(p, head, pushable_tasks) {
+		if (pushable_chain(rq, p, 0)) {
+			push_task = p;
+			break;
+		}
+	}
+
+	if (!push_task)
+		return NULL;
+
+	BUG_ON(rq->cpu != task_cpu(push_task));
+	BUG_ON(task_current(rq, push_task) || task_current_selected(rq, push_task));
+	BUG_ON(!task_on_rq_queued(push_task));
+	BUG_ON(!rt_task(push_task));
+
+	return p;
+}
+
 /* Will lock the rq it finds */
 static struct rq *find_lock_lowest_rq(struct task_struct *task, struct rq *rq)
 {
+	struct task_struct *exec_ctx;
 	struct rq *lowest_rq = NULL;
+	bool retry;
 	int tries;
 	int cpu;
 
 	for (tries = 0; tries < RT_MAX_TRIES; tries++) {
-		cpu = find_lowest_rq(task);
+		retry = false;
+		exec_ctx = find_exec_ctx(rq, task);
+		cpu = find_lowest_rq(task, exec_ctx);
 
 		if ((cpu == -1) || (cpu == rq->cpu))
 			break;
@@ -2006,6 +2037,7 @@ static struct rq *find_lock_lowest_rq(struct task_struct *task, struct rq *rq)
 
 		/* if the prio of this runqueue changed, try again */
 		if (double_lock_balance(rq, lowest_rq)) {
+			bool fail = false;
 			/*
 			 * We had to unlock the run queue. In
 			 * the mean time, task could have
@@ -2014,14 +2046,71 @@ static struct rq *find_lock_lowest_rq(struct task_struct *task, struct rq *rq)
 			 * It is possible the task was scheduled, set
 			 * "migrate_disabled" and then got preempted, so we must
 			 * check the task migration disable flag here too.
+			 *
+			 * Releasing the rq lock means we need to re-check pushability.
+			 * Some scenarios:
+			 * 1) If a migration from another CPU sent a task/chain to rq
+			 *    that made task newly unpushable by completing a chain
+			 *    from task to rq->curr, then we need to bail out and push something
+			 *    else.
+			 * 2) If our chain led off this CPU or to a dequeued task, the last waiter
+			 *    on this CPU might have acquired the lock and woken (or even migrated
+			 *    & run, handed off the lock it held, etc...). This can invalidate the
+			 *    result of find_lowest_rq() if our chain previously ended in a blocked
+			 *    task whose affinity we could ignore, but now ends in an unblocked
+			 *    task that can't run on lowest_rq.
+			 * 3) Race described at https://lore.kernel.org/all/1523536384-26781-2-git-send-email-huawei.libin@huawei.com/
+			 *
+			 * Notes on these:
+			 * - Scenario #2 is properly handled by rerunning find_lowest_rq
+			 * - Scenario #1 requires that we fail
+			 * - Scenario #3 can AFAICT only occur when rq is not this_rq(). And the
+			 *   suggested fix is not universally correct now that push_cpu_stop() can
+			 *   call this function.
 			 */
-			if (unlikely(task_rq(task) != rq ||
-				     !cpumask_test_cpu(lowest_rq->cpu, &task->cpus_mask) ||
-				     task_on_cpu(rq, task) ||
-				     !rt_task(task) ||
-				     is_migration_disabled(task) ||
-				     !task_on_rq_queued(task))) {
+			if (!rt_task(task) || is_migration_disabled(task)) {
+				fail = true;
+			} else if (rq != this_rq()) {
+				/*
+				 * If we are dealing with a remote rq, then all bets are off
+				 * because task might have run & then been dequeued since we
+				 * released the lock, at which point our normal checks can race
+				 * with migration, as described in
+				 * https://lore.kernel.org/all/1523536384-26781-2-git-send-email-huawei.libin@huawei.com/
+				 * Need to repick to ensure we avoid a race.
+				 * But re-picking would be unnecessary & incorrect in the
+				 * push_cpu_stop() path.
+				 */
+				struct task_struct *next_task = pick_next_pushable_task(rq);
 
+				if (next_task != task) {
+					fail = true;
+				} else {
+					exec_ctx = find_exec_ctx(rq, next_task);
+					retry = (exec_ctx &&
+						 !cpumask_test_cpu(lowest_rq->cpu,
+								   &exec_ctx->cpus_mask));
+				}
+			} else {
+				/*
+				 * Chain level balancing introduces new ways for our choice of
+				 * task & rq to become invalid when we release the rq lock, e.g.:
+				 * 1) Migration to rq from another CPU makes task newly unpushable
+				 *    by completing a "blocked chain" from task to rq->curr.
+				 *    Fail so a different task can be chosen for push.
+				 * 2) In cases where task's blocked chain led to a dequeued task
+				 *    or one on another rq, the last waiter in the chain on this
+				 *    rq might have acquired the lock and woken, meaning we must
+				 *    pick a different rq if its affinity prevents running on
+				 *    lowest_rq.
+				 */
+				int pushable = pushable_chain(rq, task, lowest_rq->cpu);
+
+				fail = !pushable;
+				retry = pushable == -1;
+			}
+
+			if (unlikely(fail)) {
 				double_unlock_balance(rq, lowest_rq);
 				lowest_rq = NULL;
 				break;
@@ -2029,7 +2118,7 @@ static struct rq *find_lock_lowest_rq(struct task_struct *task, struct rq *rq)
 		}
 
 		/* If this rq is still suitable use it. */
-		if (lowest_rq->rt.highest_prio.curr > task->prio)
+		if (lowest_rq->rt.highest_prio.curr > task->prio && !retry)
 			break;
 
 		/* try again */
@@ -2038,27 +2127,6 @@ static struct rq *find_lock_lowest_rq(struct task_struct *task, struct rq *rq)
 	}
 
 	return lowest_rq;
-}
-
-static struct task_struct *pick_next_pushable_task(struct rq *rq)
-{
-	struct task_struct *p;
-
-	if (!has_pushable_tasks(rq))
-		return NULL;
-
-	p = plist_first_entry(&rq->rt.pushable_tasks,
-			      struct task_struct, pushable_tasks);
-
-	BUG_ON(rq->cpu != task_cpu(p));
-	BUG_ON(task_current(rq, p));
-	BUG_ON(task_current_selected(rq, p));
-	BUG_ON(p->nr_cpus_allowed <= 1);
-
-	BUG_ON(!task_on_rq_queued(p));
-	BUG_ON(!rt_task(p));
-
-	return p;
 }
 
 /*
@@ -2109,7 +2177,7 @@ retry:
 		if (rq_selected(rq)->sched_class != &rt_sched_class)
 			return 0;
 
-		cpu = find_lowest_rq(rq->curr);
+		cpu = find_lowest_rq(rq_selected(rq), rq->curr);
 		if (cpu == -1 || cpu == rq->cpu)
 			return 0;
 
@@ -2171,9 +2239,7 @@ retry:
 		goto retry;
 	}
 
-	deactivate_task(rq, next_task, 0);
-	set_task_cpu(next_task, lowest_rq->cpu);
-	activate_task(lowest_rq, next_task, 0);
+	push_task_chain(rq, lowest_rq, next_task);
 	resched_curr(lowest_rq);
 	ret = 1;
 
@@ -2444,9 +2510,7 @@ static void pull_rt_task(struct rq *this_rq)
 			if (is_migration_disabled(p)) {
 				push_task = get_push_task(src_rq);
 			} else {
-				deactivate_task(src_rq, p, 0);
-				set_task_cpu(p, this_cpu);
-				activate_task(this_rq, p, 0);
+				push_task_chain(src_rq, this_rq, p);
 				resched = true;
 			}
 			/*
