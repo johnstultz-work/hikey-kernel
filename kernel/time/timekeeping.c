@@ -291,6 +291,8 @@ static inline u64 timekeeping_get_delta(const struct tk_read_base *tkr)
 	/* calculate the delta since the last update_wall_time */
 	delta = clocksource_delta(cycle_now, tkr->cycle_last, tkr->mask);
 
+	if (tkr == &tk_core.timekeeper.tkr_raw)
+		trace_printk("JDB: %s cycle_now: %lld\n", __func__, cycle_now);
 	return delta;
 }
 #endif
@@ -954,7 +956,9 @@ ktime_t ktime_get_raw(void)
 
 	} while (read_seqcount_retry(&tk_core.seq, seq));
 
-	return ktime_add_ns(base, nsecs);
+	base = ktime_add_ns(base, nsecs);
+	trace_printk("JDB: %s: %lld\n", __func__, (long long)base);
+	return base;
 }
 EXPORT_SYMBOL_GPL(ktime_get_raw);
 
@@ -1529,6 +1533,7 @@ void ktime_get_raw_ts64(struct timespec64 *ts)
 
 	ts->tv_nsec = 0;
 	timespec64_add_ns(ts, nsecs);
+	trace_printk("JDB: %s: %lld\n", __func__, ts->tv_sec*NSEC_PER_SEC + ts->tv_nsec);
 }
 EXPORT_SYMBOL(ktime_get_raw_ts64);
 

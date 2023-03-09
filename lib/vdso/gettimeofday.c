@@ -255,7 +255,7 @@ static __maybe_unused int
 __cvdso_clock_gettime_data(const struct vdso_data *vd, clockid_t clock,
 			   struct __kernel_timespec *ts)
 {
-	int ret = __cvdso_clock_gettime_common(vd, clock, ts);
+	int ret = -1;// __cvdso_clock_gettime_common(vd, clock, ts);
 
 	if (unlikely(ret))
 		return clock_gettime_fallback(clock, ts);
