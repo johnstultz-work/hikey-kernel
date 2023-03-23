@@ -61,6 +61,9 @@ taken, depending on the state of the lock:
      waiting to spin on mutex owner, only to go directly to slowpath upon
      obtaining the MCS lock.
 
+     NOTE: Optimistic spinning will be avoided when using proxy execution
+     (SCHED_PROXY_EXEC) as we want to hand the lock off to the task that was
+     boosting the current owner.
 
 (iii) slowpath: last resort, if the lock is still unable to be acquired,
       the task is added to the wait-queue and sleeps until woken up by the
