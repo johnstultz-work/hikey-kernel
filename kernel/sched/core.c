@@ -3922,7 +3922,15 @@ struct task_struct *find_exec_ctx(struct rq *rq, struct task_struct *p)
 		if (owner == exec_ctx)
 			break;
 
-		if (!task_queued_on_rq(rq, owner) || task_current_selected(rq, owner)) {
+		/* If we get to current, that's the exec ctx! */
+		if (task_current(rq, owner))
+			return owner;
+
+		/*
+		 * XXX This previously was checking task_current_selected()
+		 * but that doesnt' make much sense to me. -jstultz
+		 */
+		if (!task_queued_on_rq(rq, owner)) {
 			exec_ctx = NULL;
 			break;
 		}
