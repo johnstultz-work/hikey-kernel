@@ -4006,7 +4006,7 @@ void move_queued_task_locked(struct rq *rq, struct rq *dst_rq, struct task_struc
 	WARN_ON(task_current_selected(rq, task));
 
 	while (task) {
-		if (!task_queued_on_rq(rq, task) || task_current_selected(rq, task))
+		if (!task_queued_on_rq(rq, task))
 			break;
 
 		if (task_is_blocked(task))
