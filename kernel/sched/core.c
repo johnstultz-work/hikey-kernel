@@ -3887,7 +3887,7 @@ void push_task_chain(struct rq *rq, struct rq *dst_rq, struct task_struct *task)
 	BUG_ON(task_current_selected(rq, task));
 
 	while (task) {
-		if (!task_queued_on_rq(rq, task) || task_current_selected(rq, task))
+		if (!task_queued_on_rq(rq, task))
 			break;
 
 		if (task_is_blocked(task))
