@@ -1142,6 +1142,7 @@ struct task_struct {
 #endif
 
 	struct mutex			*blocked_on;	/* lock we're blocked on */
+	bool				blocked_on_waking; /* blocked on, but waking */
 	raw_spinlock_t			blocked_lock;
 
 #ifdef CONFIG_DEBUG_ATOMIC_SLEEP
@@ -2245,6 +2246,7 @@ static inline void set_task_blocked_on(struct task_struct *p, struct mutex *m)
 	WARN_ON((!m && !p->blocked_on) || (m && p->blocked_on));
 
 	p->blocked_on = m;
+	p->blocked_on_waking = false;
 }
 
 static inline struct mutex *get_task_blocked_on(struct task_struct *p)
