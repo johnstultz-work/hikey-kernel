@@ -69,6 +69,7 @@ static int __sched __rwbase_read_lock(struct rwbase_rt *rwb,
 				      unsigned int state)
 {
 	struct rt_mutex_base *rtm = &rwb->rtmutex;
+	DEFINE_WAKE_Q(wake_q);
 	int ret;
 
 	raw_spin_lock_irq(&rtm->wait_lock);
@@ -109,7 +110,7 @@ static int __sched __rwbase_read_lock(struct rwbase_rt *rwb,
 	 * For rwlocks this returns 0 unconditionally, so the below
 	 * !ret conditionals are optimized out.
 	 */
-	ret = rwbase_rtmutex_slowlock_locked(rtm, state);
+	ret = rwbase_rtmutex_slowlock_locked(rtm, state, &wake_q);
 
 	/*
 	 * On success the rtmutex is held, so there can't be a writer
@@ -121,6 +122,7 @@ static int __sched __rwbase_read_lock(struct rwbase_rt *rwb,
 	if (!ret)
 		atomic_inc(&rwb->readers);
 	raw_spin_unlock_irq(&rtm->wait_lock);
+	wake_up_q(&wake_q);
 	if (!ret)
 		rwbase_rtmutex_unlock(rtm);
 
