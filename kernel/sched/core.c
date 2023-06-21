@@ -6525,7 +6525,7 @@ void try_to_deactivate_task(struct rq *rq, struct task_struct *p, unsigned long 
 {
 	if (signal_pending_state(state, p)) {
 		WRITE_ONCE(p->__state, TASK_RUNNING);
-	} else {
+	} else if (!task_is_blocked(p)) {
 		p->sched_contributes_to_load =
 			(state & TASK_UNINTERRUPTIBLE) &&
 			!(state & TASK_NOLOAD) &&
