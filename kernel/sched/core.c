@@ -6562,11 +6562,12 @@ pick_next_task(struct rq *rq, struct task_struct *prev, struct rq_flags *rf)
 # define SM_MASK_PREEMPT	SM_PREEMPT
 #endif
 
-bool try_to_deactivate_task(struct rq *rq, struct task_struct *p, unsigned long state)
+bool try_to_deactivate_task(struct rq *rq, struct task_struct *p,
+			    unsigned long state, bool deactivate_cond)
 {
 	if (signal_pending_state(state, p)) {
 		WRITE_ONCE(p->__state, TASK_RUNNING);
-	} else {
+	} else if (deactivate_cond) {
 		p->sched_contributes_to_load =
 			(state & TASK_UNINTERRUPTIBLE) &&
 			!(state & TASK_NOLOAD) &&
@@ -6687,7 +6688,8 @@ static void __sched notrace __schedule(unsigned int sched_mode)
 	 */
 	prev_state = READ_ONCE(prev->__state);
 	if (!(sched_mode & SM_MASK_PREEMPT) && prev_state) {
-		try_to_deactivate_task(rq, prev, prev_state);
+		try_to_deactivate_task(rq, prev, prev_state,
+				       !task_is_blocked(prev));
 		switch_count = &prev->nvcsw;
 	}
 
