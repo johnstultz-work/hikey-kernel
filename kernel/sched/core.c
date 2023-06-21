@@ -6602,12 +6602,15 @@ pick_next_task(struct rq *rq, struct task_struct *prev, struct rq_flags *rf)
  * Otherwise marks the task's __state as RUNNING
  */
 static void try_to_deactivate_task(struct rq *rq, struct task_struct *p,
-				   unsigned long task_state)
+				   unsigned long task_state, bool deactivate_cond)
 {
 	if (signal_pending_state(task_state, p)) {
 		WRITE_ONCE(p->__state, TASK_RUNNING);
 		return;
 	}
+
+	if (!deactivate_cond)
+		return;
 
 	p->sched_contributes_to_load =
 		(task_state & TASK_UNINTERRUPTIBLE) &&
@@ -6726,7 +6729,8 @@ static void __sched notrace __schedule(unsigned int sched_mode)
 	 */
 	prev_state = READ_ONCE(prev->__state);
 	if (!(sched_mode & SM_MASK_PREEMPT) && prev_state) {
-		try_to_deactivate_task(rq, prev, prev_state);
+		try_to_deactivate_task(rq, prev, prev_state,
+				       !task_is_blocked(prev));
 		switch_count = &prev->nvcsw;
 	}
 
