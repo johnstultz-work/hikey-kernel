@@ -6598,6 +6598,27 @@ bool try_to_deactivate_task(struct rq *rq, struct task_struct *p,
 	return false;
 }
 
+#ifdef CONFIG_PROXY_EXEC
+DEFINE_PER_CPU(int, flip_flop);
+static struct task_struct *
+proxy(struct rq *rq, struct task_struct *next, struct rq_flags *rf)
+{
+	/* Every other call, return NULL to force pick-again */
+	int ff = get_cpu_var(flip_flop)++;
+
+	put_cpu_var(flip_flop);
+	if (ff % 2)
+		return NULL;
+	return next;
+}
+#else /* PROXY_EXEC */
+static struct task_struct *
+proxy(struct rq *rq, struct task_struct *next, struct rq_flags *rf)
+{
+	BUG(); // This should never be called in the !PROXY case
+	return next;
+}
+#endif /* PROXY_EXEC */
 /*
  * __schedule() is the main scheduler function.
  *
@@ -6693,18 +6714,19 @@ static void __sched notrace __schedule(unsigned int sched_mode)
 		switch_count = &prev->nvcsw;
 	}
 
-	/* To mimic proxy() pick-again logic, pick the next task twice
-	 * calling __balance_callbacks(rq) inbetween to address rt callback
-	 * warnings, just as was done in the proxy patches.
-	 */
-	next = pick_next_task(rq, prev, &rf);
+pick_again:
+	next = pick_next_task(rq, rq_selected(rq), &rf);
 	rq_set_selected(rq, next);
-	rq_unpin_lock(rq, &rf);
-	__balance_callbacks(rq);
-	rq_repin_lock(rq, &rf);
+	if (unlikely(task_is_blocked(next))) {
+		next = proxy(rq, next, &rf);
+		if (!next) {
+			rq_unpin_lock(rq, &rf);
+			__balance_callbacks(rq);
+			rq_repin_lock(rq, &rf);
+			goto pick_again;
+		}
+	}
 
-	next = pick_next_task(rq, next, &rf);
-	rq_set_selected(rq, next);
 	clear_tsk_need_resched(prev);
 	clear_preempt_need_resched();
 #ifdef CONFIG_SCHED_DEBUG
