@@ -6615,11 +6615,11 @@ pick_next_task(struct rq *rq, struct task_struct *prev, struct rq_flags *rf)
  * Otherwise marks the task's __state as RUNNING and returns false
  */
 static bool try_to_deactivate_task(struct rq *rq, struct task_struct *p,
-				   unsigned long task_state)
+				   unsigned long task_state, bool deactivate_cond)
 {
 	if (signal_pending_state(task_state, p)) {
 		WRITE_ONCE(p->__state, TASK_RUNNING);
-	} else {
+	} else if (deactivate_cond) {
 		p->sched_contributes_to_load =
 			(task_state & TASK_UNINTERRUPTIBLE) &&
 			!(task_state & TASK_NOLOAD) &&
@@ -6649,6 +6649,75 @@ static bool try_to_deactivate_task(struct rq *rq, struct task_struct *p,
 	}
 	return false;
 }
+
+#ifdef CONFIG_SCHED_PROXY_EXEC
+
+static bool proxy_deactivate(struct rq *rq, struct task_struct *next)
+{
+	unsigned long state = READ_ONCE(next->__state);
+
+	/* Don't deactivate if the state has been changed to TASK_RUNNING */
+	if (state == TASK_RUNNING)
+		return false;
+	if (!try_to_deactivate_task(rq, next, state, true))
+		return false;
+	put_prev_task(rq, next);
+	rq_set_selected(rq, rq->idle);
+	resched_curr(rq);
+	return true;
+}
+
+/*
+ * Initial simple proxy that just returns the task if it's waking
+ * or deactivates the blocked task so we can pick something that
+ * isn't blocked.
+ */
+static struct task_struct *
+find_proxy_task(struct rq *rq, struct task_struct *next, struct rq_flags *rf)
+{
+	struct task_struct *ret = NULL;
+	struct task_struct *p = next;
+	struct mutex *mutex;
+
+	mutex = p->blocked_on;
+	/* Something changed in the chain, so pick again */
+	if (!mutex)
+		return NULL;
+	/*
+	 * By taking mutex->wait_lock we hold off concurrent mutex_unlock()
+	 * and ensure @owner sticks around.
+	 */
+	raw_spin_lock(&mutex->wait_lock);
+	raw_spin_lock(&p->blocked_lock);
+
+	/* Check again that p is blocked with blocked_lock held */
+	if (!task_is_blocked(p) || mutex != p->blocked_on) {
+		/*
+		 * Something changed in the blocked_on chain and
+		 * we don't know if only at this level. So, let's
+		 * just bail out completely and let __schedule
+		 * figure things out (pick_again loop).
+		 */
+		goto out;
+	}
+
+	if (!proxy_deactivate(rq, next)) {
+		p->blocked_on_state = BO_RUNNABLE;
+		ret = p;
+	}
+out:
+	raw_spin_unlock(&p->blocked_lock);
+	raw_spin_unlock(&mutex->wait_lock);
+	return ret;
+}
+#else /* SCHED_PROXY_EXEC */
+static struct task_struct *
+find_proxy_task(struct rq *rq, struct task_struct *next, struct rq_flags *rf)
+{
+	WARN_ONCE(1, "This should never be called in the !PROXY case\n");
+	return next;
+}
+#endif /* SCHED_PROXY_EXEC */
 
 /*
  * __schedule() is the main scheduler function.
@@ -6741,12 +6810,20 @@ static void __sched notrace __schedule(unsigned int sched_mode)
 	 */
 	prev_state = READ_ONCE(prev->__state);
 	if (!(sched_mode & SM_MASK_PREEMPT) && prev_state) {
-		try_to_deactivate_task(rq, prev, prev_state);
+		try_to_deactivate_task(rq, prev, prev_state,
+				       !task_is_blocked(prev));
 		switch_count = &prev->nvcsw;
 	}
 
-	next = pick_next_task(rq, prev, &rf);
+pick_again:
+	next = pick_next_task(rq, rq_selected(rq), &rf);
 	rq_set_selected(rq, next);
+	if (unlikely(task_is_blocked(next))) {
+		next = find_proxy_task(rq, next, &rf);
+		if (!next)
+			goto pick_again;
+	}
+
 	clear_tsk_need_resched(prev);
 	clear_preempt_need_resched();
 #ifdef CONFIG_SCHED_DEBUG
