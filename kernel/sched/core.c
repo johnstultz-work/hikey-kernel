@@ -6691,7 +6691,17 @@ static void __sched notrace __schedule(unsigned int sched_mode)
 		switch_count = &prev->nvcsw;
 	}
 
+	/* To mimic proxy() pick-again logic, pick the next task twice
+	 * calling __balance_callbacks(rq) inbetween to address rt callback
+	 * warnings, just as was done in the proxy patches.
+	 */
 	next = pick_next_task(rq, prev, &rf);
+	rq_set_selected(rq, next);
+	rq_unpin_lock(rq, &rf);
+	__balance_callbacks(rq);
+	rq_repin_lock(rq, &rf);
+
+	next = pick_next_task(rq, next, &rf);
 	rq_set_selected(rq, next);
 	clear_tsk_need_resched(prev);
 	clear_preempt_need_resched();
