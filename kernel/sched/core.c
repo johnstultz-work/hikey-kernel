@@ -6920,7 +6920,7 @@ proxy(struct rq *rq, struct task_struct *next, struct rq_flags *rf)
 			 */
 			raw_spin_unlock(&p->blocked_lock);
 			raw_spin_unlock(&mutex->wait_lock);
-			return proxy_resched_idle(rq, next);
+			return p; //proxy_resched_idle(rq, next);
 		}
 
 		/*
