@@ -2996,8 +2996,15 @@ static int affine_move_task(struct rq *rq, struct task_struct *p, struct rq_flag
 	struct set_affinity_pending my_pending = { }, *pending = NULL;
 	bool stop_pending, complete = false;
 
-	/* Can the task run on the task's current CPU? If so, we're done */
-	if (cpumask_test_cpu(task_cpu(p), &p->cpus_mask)) {
+	/*
+	 * Can the task run on the task's current CPU? If so, we're done
+	 *
+	 * We are also done if the task is selected, boosting a lock-
+	 * holding proxy, (and potentially has been migrated outside its
+	 * current or previous affinity mask)
+	 */
+	if (cpumask_test_cpu(task_cpu(p), &p->cpus_mask) ||
+	    (task_current_selected(rq, p) && !task_current(rq, p))) {
 		struct task_struct *push_task = NULL;
 
 		if ((flags & SCA_MIGRATE_ENABLE) &&
@@ -3793,6 +3800,37 @@ static inline void ttwu_do_wakeup(struct task_struct *p)
 	trace_sched_wakeup(p);
 }
 
+#ifdef CONFIG_SMP
+static inline bool proxy_needs_return(struct rq *rq, struct task_struct *p)
+{
+	bool ret = false;
+
+	if (!sched_proxy_exec())
+		return false;
+
+	raw_spin_lock(&p->blocked_lock);
+	if (get_task_blocked_on(p) && p->blocked_on_state == BO_WAKING) {
+		if (!task_current(rq, p) && (p->wake_cpu != cpu_of(rq))) {
+			if (task_current_selected(rq, p)) {
+				put_prev_task(rq, p);
+				rq_set_selected(rq, rq->idle);
+			}
+			deactivate_task(rq, p, DEQUEUE_NOCLOCK);
+			ret = true;
+		}
+		p->blocked_on_state = BO_RUNNABLE;
+		resched_curr(rq);
+	}
+	raw_spin_unlock(&p->blocked_lock);
+	return ret;
+}
+#else /* !CONFIG_SMP */
+static inline bool proxy_needs_return(struct rq *rq, struct task_struct *p)
+{
+	return false;
+}
+#endif /*CONFIG_SMP */
+
 static void
 ttwu_do_activate(struct rq *rq, struct task_struct *p, int wake_flags,
 		 struct rq_flags *rf)
@@ -3888,9 +3926,12 @@ static int ttwu_runnable(struct task_struct *p, int wake_flags)
 			update_rq_clock(rq);
 			check_preempt_curr(rq, p, wake_flags);
 		}
+		if (proxy_needs_return(rq, p))
+			goto out;
 		ttwu_do_wakeup(p);
 		ret = 1;
 	}
+out:
 	__task_rq_unlock(rq, &rf);
 
 	return ret;
@@ -4248,6 +4289,8 @@ int try_to_wake_up(struct task_struct *p, unsigned int state, int wake_flags)
 
 		trace_sched_waking(p);
 		ttwu_do_wakeup(p);
+		/* If current is waking up, we know we can run here, so set BO_RUNNBLE */
+		set_blocked_on_runnable(p);
 		goto out;
 	}
 
@@ -4259,8 +4302,16 @@ int try_to_wake_up(struct task_struct *p, unsigned int state, int wake_flags)
 	 */
 	scoped_guard (raw_spinlock_irqsave, &p->pi_lock) {
 		smp_mb__after_spinlock();
-		if (!ttwu_state_match(p, state, &success))
-			break;
+		if (!ttwu_state_match(p, state, &success)) {
+			/*
+			 * If we're already TASK_RUNNING, and BO_WAKING
+			 * continue on to ttwu_runnable check to force
+			 * proxy_needs_return evaluation
+			 */
+			if (!(READ_ONCE(p->__state) == TASK_RUNNING &&
+			      READ_ONCE(p->blocked_on_state) == BO_WAKING))
+				break;
+		}
 
 		trace_sched_waking(p);
 
@@ -4323,6 +4374,7 @@ int try_to_wake_up(struct task_struct *p, unsigned int state, int wake_flags)
 		 * enqueue, such as ttwu_queue_wakelist().
 		 */
 		WRITE_ONCE(p->__state, TASK_WAKING);
+		set_blocked_on_runnable(p);
 
 		/*
 		 * If the owning (remote) CPU is still in the middle of schedule() with
@@ -4376,7 +4428,6 @@ int try_to_wake_up(struct task_struct *p, unsigned int state, int wake_flags)
 		ttwu_queue(p, cpu, wake_flags);
 	}
 out:
-	set_blocked_on_runnable(p);
 	if (success)
 		ttwu_stat(p, task_cpu(p), wake_flags);
 
@@ -6675,6 +6726,87 @@ static bool proxy_deactivate(struct rq *rq, struct task_struct *next)
 	return try_to_deactivate_task(rq, next, state, true);
 }
 
+#ifdef CONFIG_SMP
+/*
+ * If the blocked-on relationship crosses CPUs, migrate @p to the
+ * owner's CPU.
+ *
+ * This is because we must respect the CPU affinity of execution
+ * contexts (owner) but we can ignore affinity for scheduling
+ * contexts (@p). So we have to move scheduling contexts towards
+ * potential execution contexts.
+ *
+ * Note: The owner can disappear, but simply migrate to @target_cpu
+ * and leave that CPU to sort things out.
+ */
+static void proxy_migrate_task(struct rq *rq, struct rq_flags *rf,
+			       struct task_struct *p, int target_cpu)
+{
+	struct rq *target_rq;
+	int wake_cpu;
+
+	lockdep_assert_rq_held(rq);
+	target_rq = cpu_rq(target_cpu);
+
+	/*
+	 * Since we're going to drop @rq, we have to put(@rq_selected) first,
+	 * otherwise we have a reference that no longer belongs to us.
+	 *
+	 * Additionally, as we put_prev_task(prev) earlier, its possible that
+	 * prev will migrate away as soon as we drop the rq lock, however we
+	 * still have it marked as rq->curr, as we've not yet switched tasks.
+	 *
+	 * After the migration, we are going to pick_again in the __schedule
+	 * logic, so backtrack a bit before we release the lock:
+	 * Put rq_selected, and set rq->curr as rq_selected and set_next_task,
+	 * so that we're close to the situation we had entering __schedule
+	 * the first time.
+	 *
+	 * Then when we re-aquire the lock, we will re-put rq->curr then
+	 * rq_set_selected(rq->idle) and set_next_task(rq->idle), before
+	 * picking again.
+	 */
+	put_prev_task(rq, rq_selected(rq));
+	rq_set_selected(rq, rq->curr);
+	set_next_task(rq, rq->curr);
+
+	WARN_ON(p == rq->curr);
+
+	wake_cpu = p->wake_cpu;
+	deactivate_task(rq, p, 0);
+	set_task_cpu(p, target_cpu);
+	/*
+	 * Preserve p->wake_cpu, such that we can tell where it
+	 * used to run later.
+	 */
+	p->wake_cpu = wake_cpu;
+
+	zap_balance_callbacks(rq);
+	rq_unpin_lock(rq, rf);
+	raw_spin_rq_unlock(rq);
+	raw_spin_rq_lock(target_rq);
+
+	activate_task(target_rq, p, 0);
+	check_preempt_curr(target_rq, p, 0);
+
+	raw_spin_rq_unlock(target_rq);
+	raw_spin_rq_lock(rq);
+	rq_repin_lock(rq, rf);
+
+	/*
+	 * Ok, now we have the lock again, put rq->curr and
+	 * set_next_task() to idle
+	 */
+	proxy_resched_idle(rq, rq->curr);
+}
+#else /* !CONFIG_SMP */
+static inline
+void proxy_migrate_task(struct rq *rq, struct rq_flags *rf,
+			struct task_struct *p, int target_cpu)
+{
+}
+#endif /* CONFIG_SMP */
+
 /*
  * Find who @next (currently blocked on a mutex) can proxy for.
  *
@@ -6697,8 +6829,11 @@ find_proxy_task(struct rq *rq, struct task_struct *next, struct rq_flags *rf)
 	struct task_struct *owner = NULL;
 	struct task_struct *ret = NULL;
 	struct task_struct *p;
+	int cur_cpu, target_cpu;
 	struct mutex *mutex;
-	int this_cpu = cpu_of(rq);
+	bool curr_in_chain = false;
+
+	cur_cpu = cpu_of(rq);
 
 	/*
 	 * Follow blocked_on chain.
@@ -6728,18 +6863,48 @@ find_proxy_task(struct rq *rq, struct task_struct *next, struct rq_flags *rf)
 			goto out;
 		}
 
+		if (task_current(rq, p))
+			curr_in_chain = true;
+
 		owner = __mutex_owner(mutex);
 		if (!owner) {
-			p->blocked_on_state = BO_RUNNABLE;
-			ret = p;
-			goto out;
+			/* If the owner is null, we may have some work to do */
+
+			/* First if p is no longer blocked, just return */
+			if (!task_is_blocked(p)) {
+				ret = p;
+				goto out;
+			}
+
+			/* If we're allowed to run on this cpu, set p as BO_RUNNABLE */
+			if (is_cpu_allowed(p, cpu_of(rq))) {
+				p->blocked_on_state = BO_RUNNABLE;
+				ret = p;
+				goto out;
+			}
+			raw_spin_unlock(&p->blocked_lock);
+			raw_spin_unlock(&mutex->wait_lock);
+
+			/* We can't to run on this cpu, so migrate to wake_cpu */
+			if (curr_in_chain)
+				return proxy_resched_idle(rq, next);
+			proxy_migrate_task(rq, rf, p, p->wake_cpu);
+			return NULL;
 		}
 
-		if (task_cpu(owner) != this_cpu) {
-			/* XXX Don't handle migrations yet */
-			if (!proxy_deactivate(rq, next))
-				next->blocked_on_state = BO_RUNNABLE;
-			goto out;
+		if (task_cpu(owner) != cur_cpu) {
+			target_cpu = task_cpu(owner);
+			/*
+			 * @owner can disappear, simply migrate to @target_cpu and leave that CPU
+			 * to sort things out.
+			 */
+			raw_spin_unlock(&p->blocked_lock);
+			raw_spin_unlock(&mutex->wait_lock);
+			if (curr_in_chain)
+				return proxy_resched_idle(rq, next);
+
+			proxy_migrate_task(rq, rf, p, target_cpu);
+			return NULL;
 		}
 
 		if (task_on_rq_migrating(owner)) {
@@ -6762,6 +6927,14 @@ find_proxy_task(struct rq *rq, struct task_struct *next, struct rq_flags *rf)
 				next->blocked_on_state = BO_RUNNABLE;
 			goto out;
 		}
+
+		/*
+		 * We could race with ttwu's return migration, so holding the
+		 * rq lock, double check owner is both on_rq & on this cpu, as
+		 * it might not even be on our RQ still
+		 */
+		if (!(task_on_rq_queued(owner) && task_cpu(owner) == cur_cpu))
+			goto out;
 
 		if (owner == p) {
 			/*

@@ -1549,6 +1549,9 @@ enqueue_task_rt(struct rq *rq, struct task_struct *p, int flags)
 	if (p->nr_cpus_allowed == 1)
 		return;
 
+	if (task_is_blocked(p))
+		return;
+
 	enqueue_pushable_task(rq, p);
 }
 
@@ -1836,6 +1839,8 @@ static void put_prev_task_rt(struct rq *rq, struct task_struct *p)
 
 	update_rt_rq_load_avg(rq_clock_pelt(rq), rq, 1);
 
+	if (task_is_blocked(p))
+		return;
 	/*
 	 * The previous task needs to be made eligible for pushing
 	 * if it is still active
