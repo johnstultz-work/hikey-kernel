@@ -6557,6 +6557,15 @@ void try_to_deactivate_task(struct rq *rq, struct task_struct *p,
 
 #ifdef CONFIG_PROXY_EXEC
 
+static inline struct task_struct *
+proxy_resched_idle(struct rq *rq, struct task_struct *next)
+{
+	put_prev_task(rq, next);
+	rq_set_selected(rq, rq->idle);
+	set_tsk_need_resched(rq->idle);
+	return rq->idle;
+}
+
 void proxy_deactivate(struct rq *rq, struct task_struct *next)
 {
 	unsigned long state = READ_ONCE(next->__state);
@@ -6575,11 +6584,19 @@ void proxy_deactivate(struct rq *rq, struct task_struct *next)
  * or deactivates the blocked task so we can pick something that
  * isn't blocked.
  */
+DEFINE_PER_CPU(int, flip_flop);
 static struct task_struct *
 proxy(struct rq *rq, struct task_struct *next, struct rq_flags *rf)
 {
 	struct task_struct *p = next;
 	struct mutex *mutex;
+
+	/* Every other call, return idle */
+	int ff = get_cpu_var(flip_flop)++;
+
+	put_cpu_var(flip_flop);
+	if (ff % 2)
+		return proxy_resched_idle(rq, next);
 
 	mutex = p->blocked_on;
 	/* Something changed in the chain, pick_again */
