@@ -6677,11 +6677,19 @@ static bool proxy_deactivate(struct rq *rq, struct task_struct *next)
  * or deactivates the blocked task so we can pick something that
  * isn't blocked.
  */
+DEFINE_PER_CPU(int, flip_flop);
 static struct task_struct *
 find_proxy_task(struct rq *rq, struct task_struct *next, struct rq_flags *rf)
 {
 	struct task_struct *p = next;
 	struct mutex *mutex;
+
+	/* Every other call, return idle */
+	int ff = get_cpu_var(flip_flop)++;
+
+	put_cpu_var(flip_flop);
+	if (ff % 2)
+		return proxy_resched_idle(rq, next);
 
 	mutex = p->blocked_on;
 	/* Something changed in the chain, so pick again */
