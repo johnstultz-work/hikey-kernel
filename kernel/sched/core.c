@@ -6734,6 +6734,12 @@ proxy(struct rq *rq, struct task_struct *next, struct rq_flags *rf)
 			curr_in_chain = true;
 
 		owner = __mutex_owner(mutex);
+		if (!owner) {
+			raw_spin_unlock(&p->blocked_lock);
+			raw_spin_unlock(&mutex->wait_lock);
+			return p;
+		}
+
 		if (task_cpu(owner) != this_cpu) {
 			that_cpu = task_cpu(owner);
 			/*
