@@ -6556,6 +6556,20 @@ void try_to_deactivate_task(struct rq *rq, struct task_struct *p,
 }
 
 #ifdef CONFIG_PROXY_EXEC
+
+void proxy_deactivate(struct rq *rq, struct task_struct *next)
+{
+	unsigned long state = READ_ONCE(next->__state);
+
+	/* Don't deactivate if the state has been changed to TASK_RUNNING */
+	if (!state)
+		return;
+	try_to_deactivate_task(rq, next, state, true);
+	put_prev_task(rq, next);
+	rq_set_selected(rq, rq->idle);
+	resched_curr(rq);
+}
+
 /*
  * Initial simple proxy that just returns the task if its waking
  * or deactivates the blocked task so we can pick something that
@@ -6566,7 +6580,6 @@ proxy(struct rq *rq, struct task_struct *next, struct rq_flags *rf)
 {
 	struct task_struct *p = next;
 	struct mutex *mutex;
-	unsigned long state;
 
 	mutex = p->blocked_on;
 	/* Something changed in the chain, pick_again */
@@ -6592,24 +6605,7 @@ proxy(struct rq *rq, struct task_struct *next, struct rq_flags *rf)
 		return NULL;
 	}
 
-	state = READ_ONCE(p->__state);
-	/* Don't deactivate if the state has been changed to TASK_RUNNING */
-	if (!state) {
-		raw_spin_unlock(&p->blocked_lock);
-		raw_spin_unlock(&mutex->wait_lock);
-		return p;
-	}
-
-	try_to_deactivate_task(rq, next, state, true);
-
-	/*
-	 * If next is the selected task, then remove lingering
-	 * references to it from rq and sched_class structs after
-	 * dequeueing.
-	 */
-	put_prev_task(rq, next);
-	rq_set_selected(rq, rq->idle);
-	resched_curr(rq);
+	proxy_deactivate(rq, next);
 	raw_spin_unlock(&p->blocked_lock);
 	raw_spin_unlock(&mutex->wait_lock);
 	return NULL;
