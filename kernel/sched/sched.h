@@ -2270,12 +2270,15 @@ struct sched_class {
 
 static inline void put_prev_task(struct rq *rq, struct task_struct *prev)
 {
+
 	WARN_ON_ONCE(rq->curr != prev);
+	trace_printk("JDB: %s: %s %d  on rq_cpu: %i\n", __func__, prev->comm, prev->pid, cpu_of(rq));
 	prev->sched_class->put_prev_task(rq, prev);
 }
 
 static inline void set_next_task(struct rq *rq, struct task_struct *next)
 {
+	trace_printk("JDB: %s: %s %d  on rq_cpu: %i\n", __func__, next->comm, next->pid, cpu_of(rq));
 	next->sched_class->set_next_task(rq, next, false);
 }
 

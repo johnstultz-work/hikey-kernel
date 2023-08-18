@@ -3307,6 +3307,7 @@ account_entity_enqueue(struct cfs_rq *cfs_rq, struct sched_entity *se)
 	}
 #endif
 	cfs_rq->nr_running++;
+	trace_printk("JDB: %s: cpu: %i inc'ing cfs_rq(%p)->nr_running: %i\n", __func__, cpu_of(rq_of(cfs_rq)), cfs_rq, cfs_rq->nr_running);
 	if (se_is_idle(se))
 		cfs_rq->idle_nr_running++;
 }
@@ -3322,6 +3323,7 @@ account_entity_dequeue(struct cfs_rq *cfs_rq, struct sched_entity *se)
 	}
 #endif
 	cfs_rq->nr_running--;
+	trace_printk("JDB: %s: cpu: %i dec'ing cfs_rq(%p)->nr_running: %i\n", __func__, cpu_of(rq_of(cfs_rq)), cfs_rq, cfs_rq->nr_running);
 	if (se_is_idle(se))
 		cfs_rq->idle_nr_running--;
 }
@@ -5071,11 +5073,14 @@ set_next_entity(struct cfs_rq *cfs_rq, struct sched_entity *se)
 		 * runqueue.
 		 */
 		update_stats_wait_end_fair(cfs_rq, se);
+		trace_printk("JDB: %s:%d calling __dequeue_entity\n", __func__, __LINE__);
 		__dequeue_entity(cfs_rq, se);
 		update_load_avg(cfs_rq, se, UPDATE_TG);
 	}
 
 	update_stats_curr_start(cfs_rq, se);
+
+	trace_printk("JDB: %s setting cfs_rq(%p)->curr = %p\n", __func__, cfs_rq, se);
 	cfs_rq->curr = se;
 
 	/*
@@ -5094,6 +5099,7 @@ set_next_entity(struct cfs_rq *cfs_rq, struct sched_entity *se)
 	}
 
 	se->prev_sum_exec_runtime = se->sum_exec_runtime;
+	trace_printk("JDB: %s calling sanity check!\n", __func__);
 	sanity_check_rq(cfs_rq);
 }
 
@@ -5164,6 +5170,7 @@ static void put_prev_entity(struct cfs_rq *cfs_rq, struct sched_entity *prev)
 	 * If still on the runqueue then deactivate_task()
 	 * was not called and update_curr() has to be done:
 	 */
+	trace_printk("JDB: %s: prev->on_rq: %i\n", __func__, prev->on_rq);
 	if (prev->on_rq)
 		update_curr(cfs_rq);
 
@@ -5178,7 +5185,10 @@ static void put_prev_entity(struct cfs_rq *cfs_rq, struct sched_entity *prev)
 		__enqueue_entity(cfs_rq, prev);
 		/* in !on_rq case, update occurred at dequeue */
 		update_load_avg(cfs_rq, prev, 0);
+	} else {
+		trace_printk("JDB: %s: skipped enqueue_entry because !on_rq\n", __func__);
 	}
+	trace_printk("JDB: %s setting cfs_rq(%p)->curr = NULL\n", __func__, cfs_rq);
 	cfs_rq->curr = NULL;
 }
 
@@ -5467,6 +5477,7 @@ static bool throttle_cfs_rq(struct cfs_rq *cfs_rq)
 		if (!se->on_rq)
 			goto done;
 
+		trace_printk("JDB: %s:%d calling dequeue_entity\n", __func__, __LINE__);
 		dequeue_entity(qcfs_rq, se, DEQUEUE_SLEEP);
 
 		if (cfs_rq_is_idle(group_cfs_rq(se)))
@@ -5474,12 +5485,14 @@ static bool throttle_cfs_rq(struct cfs_rq *cfs_rq)
 
 		qcfs_rq->h_nr_running -= task_delta;
 		qcfs_rq->idle_h_nr_running -= idle_task_delta;
+		trace_printk("JDB: %s #2 dec'ed(%ld) h_nr_running: %i\n", __func__, task_delta, qcfs_rq->h_nr_running);
 
 		if (qcfs_rq->load.weight) {
 			/* Avoid re-evaluating load for this entity: */
 			se = parent_entity(se);
 			break;
 		}
+		trace_printk("JDB: %s #1 calling sanity check!\n", __func__);
 		sanity_check_rq(qcfs_rq);
 	}
 
@@ -5497,6 +5510,8 @@ static bool throttle_cfs_rq(struct cfs_rq *cfs_rq)
 
 		qcfs_rq->h_nr_running -= task_delta;
 		qcfs_rq->idle_h_nr_running -= idle_task_delta;
+		trace_printk("JDB: %s #2 dec'ed(%ld) h_nr_running: %i\n", __func__, task_delta, qcfs_rq->h_nr_running);
+		trace_printk("JDB: %s #2 calling sanity check!\n", __func__);
 		sanity_check_rq(qcfs_rq);
 	}
 
@@ -5555,6 +5570,7 @@ void unthrottle_cfs_rq(struct cfs_rq *cfs_rq)
 
 		if (se->on_rq)
 			break;
+		trace_printk("JDB: %s:%d calling enqueue_entity\n", __func__, __LINE__);
 		enqueue_entity(qcfs_rq, se, ENQUEUE_WAKEUP);
 
 		if (cfs_rq_is_idle(group_cfs_rq(se)))
@@ -5562,10 +5578,12 @@ void unthrottle_cfs_rq(struct cfs_rq *cfs_rq)
 
 		qcfs_rq->h_nr_running += task_delta;
 		qcfs_rq->idle_h_nr_running += idle_task_delta;
+		trace_printk("JDB: %s #1 inc'ed(%ld) h_nr_running: %i\n", __func__, task_delta, qcfs_rq->h_nr_running);
 
 		/* end evaluation on encountering a throttled cfs_rq */
 		if (cfs_rq_throttled(qcfs_rq))
 			goto unthrottle_throttle;
+		trace_printk("JDB: %s #1 calling sanity check!\n", __func__);
 		sanity_check_rq(qcfs_rq);
 	}
 
@@ -5581,10 +5599,12 @@ void unthrottle_cfs_rq(struct cfs_rq *cfs_rq)
 
 		qcfs_rq->h_nr_running += task_delta;
 		qcfs_rq->idle_h_nr_running += idle_task_delta;
+		trace_printk("JDB: %s #2 inc'ed(%ld) h_nr_running: %i\n", __func__, task_delta, qcfs_rq->h_nr_running);
 
 		/* end evaluation on encountering a throttled cfs_rq */
 		if (cfs_rq_throttled(qcfs_rq))
 			goto unthrottle_throttle;
+		trace_printk("JDB: %s #2 calling sanity check!\n", __func__);
 		sanity_check_rq(qcfs_rq);
 	}
 
@@ -6345,6 +6365,7 @@ enqueue_task_fair(struct rq *rq, struct task_struct *p, int flags)
 	int idle_h_nr_running = task_has_idle_policy(p);
 	int task_new = !(flags & ENQUEUE_WAKEUP);
 
+	trace_printk("JDB: %s: on %s %d\n", __func__, p->comm, p->pid);
 	/*
 	 * The code below (indirectly) updates schedutil which looks at
 	 * the cfs_rq utilization to select a frequency.
@@ -6365,10 +6386,12 @@ enqueue_task_fair(struct rq *rq, struct task_struct *p, int flags)
 		if (se->on_rq)
 			break;
 		cfs_rq = cfs_rq_of(se);
+		trace_printk("JDB: %s:%d calling enqueue_entity\n", __func__, __LINE__);
 		enqueue_entity(cfs_rq, se, flags);
 
 		cfs_rq->h_nr_running++;
 		cfs_rq->idle_h_nr_running += idle_h_nr_running;
+		trace_printk("JDB: %s #1 inc'ed h_nr_running: %i\n", __func__, cfs_rq->h_nr_running);
 
 		if (cfs_rq_is_idle(cfs_rq))
 			idle_h_nr_running = 1;
@@ -6378,6 +6401,7 @@ enqueue_task_fair(struct rq *rq, struct task_struct *p, int flags)
 			goto enqueue_throttle;
 
 		flags = ENQUEUE_WAKEUP;
+		trace_printk("JDB: %s #1 calling sanity check!\n", __func__);
 		sanity_check_rq(cfs_rq);
 	}
 
@@ -6390,6 +6414,7 @@ enqueue_task_fair(struct rq *rq, struct task_struct *p, int flags)
 
 		cfs_rq->h_nr_running++;
 		cfs_rq->idle_h_nr_running += idle_h_nr_running;
+		trace_printk("JDB: %s #2 inc'ed h_nr_running: %i\n", __func__, cfs_rq->h_nr_running);
 
 		if (cfs_rq_is_idle(cfs_rq))
 			idle_h_nr_running = 1;
@@ -6397,6 +6422,7 @@ enqueue_task_fair(struct rq *rq, struct task_struct *p, int flags)
 		/* end evaluation on encountering a throttled cfs_rq */
 		if (cfs_rq_throttled(cfs_rq))
 			goto enqueue_throttle;
+		trace_printk("JDB: %s #2 calling sanity check!\n", __func__);
 		sanity_check_rq(cfs_rq);
 	}
 
@@ -6440,15 +6466,19 @@ static void dequeue_task_fair(struct rq *rq, struct task_struct *p, int flags)
 	int task_sleep = flags & DEQUEUE_SLEEP;
 	int idle_h_nr_running = task_has_idle_policy(p);
 	bool was_sched_idle = sched_idle_rq(rq);
+	
+	trace_printk("JDB: %s: on %s %d\n", __func__, p->comm, p->pid);
 
 	util_est_dequeue(&rq->cfs, p);
 
 	for_each_sched_entity(se) {
 		cfs_rq = cfs_rq_of(se);
+		trace_printk("JDB: %s:%d calling dequeue_entity\n", __func__, __LINE__);
 		dequeue_entity(cfs_rq, se, flags);
 
 		cfs_rq->h_nr_running--;
 		cfs_rq->idle_h_nr_running -= idle_h_nr_running;
+		trace_printk("JDB: %s #1 dec'ed h_nr_running: %i\n", __func__, cfs_rq->h_nr_running);
 
 		if (cfs_rq_is_idle(cfs_rq))
 			idle_h_nr_running = 1;
@@ -6481,6 +6511,7 @@ static void dequeue_task_fair(struct rq *rq, struct task_struct *p, int flags)
 
 		cfs_rq->h_nr_running--;
 		cfs_rq->idle_h_nr_running -= idle_h_nr_running;
+		trace_printk("JDB: %s #2 dec'ed h_nr_running: %i\n", __func__, cfs_rq->h_nr_running);
 
 		if (cfs_rq_is_idle(cfs_rq))
 			idle_h_nr_running = 1;
@@ -8175,6 +8206,7 @@ again:
 			int pse_depth = pse->depth;
 
 			if (se_depth <= pse_depth) {
+				trace_printk("JDB: %s #1 calling put_prev_entity\n", __func__);
 				put_prev_entity(cfs_rq_of(pse), pse);
 				pse = parent_entity(pse);
 			}
@@ -8184,6 +8216,7 @@ again:
 			}
 		}
 
+		trace_printk("JDB: %s #2 calling put_prev_entity\n", __func__);
 		put_prev_entity(cfs_rq, pse);
 		set_next_entity(cfs_rq, se);
 	}
@@ -8192,6 +8225,7 @@ again:
 simple:
 #endif
 	if (prev) {
+		trace_printk("JDB: %s calling put_prev_task on %s %d\n", __func__, prev->comm, prev->pid);
 		put_prev_task(rq, prev);
 	}
 
@@ -8264,8 +8298,10 @@ static void put_prev_task_fair(struct rq *rq, struct task_struct *prev)
 	struct sched_entity *se = &prev->se;
 	struct cfs_rq *cfs_rq;
 
+	trace_printk("JDB: %s on %s %d\n", __func__, prev->comm, prev->pid);
 	for_each_sched_entity(se) {
 		cfs_rq = cfs_rq_of(se);
+		trace_printk("JDB: %s calling put_prev_entity\n", __func__);
 		put_prev_entity(cfs_rq, se);
 	}
 }
@@ -12421,6 +12457,7 @@ static void switched_to_fair(struct rq *rq, struct task_struct *p)
 static void set_next_task_fair(struct rq *rq, struct task_struct *p, bool first)
 {
 	struct sched_entity *se = &p->se;
+	trace_printk("JDB: %s on %s %d\n", __func__, p->comm, p->pid);
 
 #ifdef CONFIG_SMP
 	if (task_on_rq_queued(p)) {
