@@ -241,6 +241,27 @@ static inline void update_load_set(struct load_weight *lw, unsigned long w)
 	lw->inv_weight = 0;
 }
 
+
+static inline void sanity_check_rq(struct cfs_rq *cfs_rq)
+{
+	struct rb_node *node;
+	int count = 0;
+	int cpu = cpu_of(rq_of(cfs_rq));
+
+	for (node = rb_first_cached(&cfs_rq->tasks_timeline); node; node = rb_next(node)) {
+		count++;
+	}
+	if (cfs_rq->curr)
+		count++;
+
+	trace_printk("JDB: %s: cpu: %i cfs_rq: %p  nr_running: %i h_nr_running: %i  count: %i (including: %p)\n", __func__, cpu, cfs_rq, cfs_rq->nr_running, cfs_rq->h_nr_running, count, cfs_rq->curr);
+	if (cfs_rq->nr_running != count) {
+		printk("ERRR: JDB: %s: cfs_rq: %p  nr_running: %i h_nr_running: %i  count: %i (including  %p)\n", __func__, cfs_rq, cfs_rq->nr_running, cfs_rq->h_nr_running, count, cfs_rq->curr);
+		trace_printk("ERRR: JDB: %s: cfs_rq: %p  nr_running: %i h_nr_running: %i  count: %i (including %p)\n", __func__, cfs_rq, cfs_rq->nr_running, cfs_rq->h_nr_running, count, cfs_rq->curr);
+		BUG();
+	}
+}
+
 /*
  * Increase the granularity value when there are more CPUs,
  * because with more CPUs the 'effective latency' as visible
@@ -647,6 +668,11 @@ static void __enqueue_entity(struct cfs_rq *cfs_rq, struct sched_entity *se)
 
 static void __dequeue_entity(struct cfs_rq *cfs_rq, struct sched_entity *se)
 {
+	if (!se) {
+		trace_printk("JDB: %s null SE from cfs_rq: %p\n", __func__, cfs_rq);
+		printk("JDB: %s null SE from cfs_rq: %p\n", __func__, cfs_rq);
+		BUG();
+	}
 	rb_erase_cached(&se->run_node, &cfs_rq->tasks_timeline);
 }
 
@@ -5068,6 +5094,7 @@ set_next_entity(struct cfs_rq *cfs_rq, struct sched_entity *se)
 	}
 
 	se->prev_sum_exec_runtime = se->sum_exec_runtime;
+	sanity_check_rq(cfs_rq);
 }
 
 static int
@@ -5453,6 +5480,7 @@ static bool throttle_cfs_rq(struct cfs_rq *cfs_rq)
 			se = parent_entity(se);
 			break;
 		}
+		sanity_check_rq(qcfs_rq);
 	}
 
 	for_each_sched_entity(se) {
@@ -5469,6 +5497,7 @@ static bool throttle_cfs_rq(struct cfs_rq *cfs_rq)
 
 		qcfs_rq->h_nr_running -= task_delta;
 		qcfs_rq->idle_h_nr_running -= idle_task_delta;
+		sanity_check_rq(qcfs_rq);
 	}
 
 	/* At this point se is NULL and we are at root level*/
@@ -5537,7 +5566,9 @@ void unthrottle_cfs_rq(struct cfs_rq *cfs_rq)
 		/* end evaluation on encountering a throttled cfs_rq */
 		if (cfs_rq_throttled(qcfs_rq))
 			goto unthrottle_throttle;
+		sanity_check_rq(qcfs_rq);
 	}
+
 
 	for_each_sched_entity(se) {
 		struct cfs_rq *qcfs_rq = cfs_rq_of(se);
@@ -5554,6 +5585,7 @@ void unthrottle_cfs_rq(struct cfs_rq *cfs_rq)
 		/* end evaluation on encountering a throttled cfs_rq */
 		if (cfs_rq_throttled(qcfs_rq))
 			goto unthrottle_throttle;
+		sanity_check_rq(qcfs_rq);
 	}
 
 	/* At this point se is NULL and we are at root level*/
@@ -6346,6 +6378,7 @@ enqueue_task_fair(struct rq *rq, struct task_struct *p, int flags)
 			goto enqueue_throttle;
 
 		flags = ENQUEUE_WAKEUP;
+		sanity_check_rq(cfs_rq);
 	}
 
 	for_each_sched_entity(se) {
@@ -6364,6 +6397,7 @@ enqueue_task_fair(struct rq *rq, struct task_struct *p, int flags)
 		/* end evaluation on encountering a throttled cfs_rq */
 		if (cfs_rq_throttled(cfs_rq))
 			goto enqueue_throttle;
+		sanity_check_rq(cfs_rq);
 	}
 
 	/* At this point se is NULL and we are at root level*/
@@ -8050,6 +8084,11 @@ again:
 		}
 
 		se = pick_next_entity(cfs_rq, curr);
+		if (!se) {
+			printk("JDB: %s got null SE! cfs_rq: %p\n", __func__, cfs_rq);
+			trace_printk("JDB: %s got null SE! cfs_rq: %p\n", __func__, cfs_rq);
+			BUG();
+		}
 		cfs_rq = group_cfs_rq(se);
 	} while (cfs_rq);
 
@@ -8113,6 +8152,11 @@ again:
 		}
 
 		se = pick_next_entity(cfs_rq, curr);
+		if (!se) {
+			printk("JDB: %s #1 got null SE! cfs_rq: %p\n", __func__, cfs_rq);
+			trace_printk("JDB: %s #1 got null SE! cfs_rq: %p\n", __func__, cfs_rq);
+			BUG();
+		}
 		cfs_rq = group_cfs_rq(se);
 	} while (cfs_rq);
 
@@ -8147,11 +8191,17 @@ again:
 	goto done;
 simple:
 #endif
-	if (prev)
+	if (prev) {
 		put_prev_task(rq, prev);
+	}
 
 	do {
 		se = pick_next_entity(cfs_rq, NULL);
+		if (!se) {
+			printk("JDB: %s #2 got null SE! cfs_rq: %p\n", __func__, cfs_rq);
+			trace_printk("JDB: %s #2 got null SE! cfs_rq: %p\n", __func__, cfs_rq);
+			BUG();
+		}
 		set_next_entity(cfs_rq, se);
 		cfs_rq = group_cfs_rq(se);
 	} while (cfs_rq);
