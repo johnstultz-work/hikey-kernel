@@ -1033,6 +1033,9 @@ struct rq {
 	unsigned int		nr_uninterruptible;
 
 	struct task_struct __rcu	*curr;       /* Execution context */
+#ifdef CONFIG_SCHED_PROXY_EXEC
+	struct task_struct __rcu	*curr_selected; /* Scheduling context (policy) */
+#endif
 	struct task_struct	*idle;
 	struct task_struct	*stop;
 	unsigned long		next_balance;
@@ -1227,12 +1230,19 @@ DECLARE_PER_CPU_SHARED_ALIGNED(struct rq, runqueues);
 #define cpu_curr(cpu)		(cpu_rq(cpu)->curr)
 #define raw_rq()		raw_cpu_ptr(&runqueues)
 
-/* For now, rq_selected == rq->curr */
+#ifdef CONFIG_SCHED_PROXY_EXEC
+#define rq_selected(rq)		((rq)->curr_selected)
+static inline void rq_set_selected(struct rq *rq, struct task_struct *t)
+{
+	rcu_assign_pointer(rq->curr_selected, t);
+}
+#else
 #define rq_selected(rq)		((rq)->curr)
 static inline void rq_set_selected(struct rq *rq, struct task_struct *t)
 {
 	/* Do nothing */
 }
+#endif
 
 struct sched_group;
 #ifdef CONFIG_SCHED_CORE
