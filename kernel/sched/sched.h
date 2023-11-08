@@ -2407,7 +2407,7 @@ extern void set_cpus_allowed_common(struct task_struct *p, struct affinity_conte
 
 static inline struct task_struct *get_push_task(struct rq *rq)
 {
-	struct task_struct *p = rq->curr;
+	struct task_struct *p = rq_selected(rq);
 
 	lockdep_assert_rq_held(rq);
 
