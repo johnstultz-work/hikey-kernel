@@ -2349,6 +2349,7 @@ __latent_entropy struct task_struct *copy_process(
 	INIT_LIST_HEAD(&p->blocked_head);
 	INIT_LIST_HEAD(&p->blocked_node);
 	INIT_LIST_HEAD(&p->blocked_activation_node);
+	INIT_LIST_HEAD(&p->migration_node);
 	p->sleeping_owner = NULL;
 #ifdef CONFIG_BCACHE
 	p->sequential_io	= 0;
