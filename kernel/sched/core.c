@@ -6797,19 +6797,6 @@ proxy_resched_idle(struct rq *rq, struct task_struct *next)
 	return rq->idle;
 }
 
-static bool proxy_deactivate(struct rq *rq, struct task_struct *next)
-{
-	unsigned long state = READ_ONCE(next->__state);
-
-	/* Don't deactivate if the state has been changed to TASK_RUNNING */
-	if (state == TASK_RUNNING)
-		return false;
-	if (!try_to_deactivate_task(rq, next, state, true))
-		return false;
-	proxy_resched_idle(rq, next);
-	return true;
-}
-
 #ifdef CONFIG_SMP
 /*
  * If the blocked-on relationship crosses CPUs, migrate @p to the
