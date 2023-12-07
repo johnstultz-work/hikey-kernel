@@ -4046,7 +4046,7 @@ static inline bool proxy_needs_return(struct rq *rq, struct task_struct *p)
 
 	if (p->blocked_on && p->blocked_on_state == BO_WAKING) {
 		raw_spin_lock(&p->blocked_lock);
-		if (p->wake_cpu != cpu_of(rq)) {
+		if (!is_cpu_allowed(p, cpu_of(rq))) {
 			if (task_current_selected(rq, p)) {
 				put_prev_task(rq, p);
 				rq_set_selected(rq, rq->idle);
