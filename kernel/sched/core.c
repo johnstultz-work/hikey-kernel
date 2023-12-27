@@ -7006,6 +7006,9 @@ static void proxy_enqueue_on_owner(struct rq *rq, struct task_struct *owner,
 	 */
 	if (!owner->on_rq) {
 		BUG_ON(!next->on_rq);
+
+		trace_sched_pe_enqueue_sleeping_task(owner, next);
+
 		deactivate_task(rq, next, DEQUEUE_SLEEP);
 		if (task_current_selected(rq, next)) {
 			put_prev_task(rq, next);
@@ -7100,6 +7103,9 @@ find_proxy_task(struct rq *rq, struct task_struct *next, struct rq_flags *rf)
 
 		if (task_cpu(owner) != cur_cpu) {
 			target_cpu = task_cpu(owner);
+
+			trace_sched_pe_cross_remote_cpu(owner);
+
 			/*
 			 * @owner can disappear, simply migrate to @target_cpu and leave that CPU
 			 * to sort things out.
@@ -7113,6 +7119,8 @@ find_proxy_task(struct rq *rq, struct task_struct *next, struct rq_flags *rf)
 		}
 
 		if (task_on_rq_migrating(owner)) {
+			trace_sched_pe_task_is_migrating(owner);
+
 			/*
 			 * One of the chain of mutex owners is currently migrating to this
 			 * CPU, but has not yet been enqueued because we are holding the
@@ -7335,6 +7343,8 @@ static void __sched notrace __schedule(unsigned int sched_mode)
 	}
 
 	prev_not_proxied = !prev->blocked_donor;
+
+	trace_sched_start_task_selection(cpu);
 pick_again:
 	next = pick_next_task(rq, rq_selected(rq), &rf);
 	rq_set_selected(rq, next);
@@ -7350,6 +7360,7 @@ pick_again:
 		if (next == rq->idle && prev == rq->idle)
 			preserve_need_resched = true;
 	}
+	trace_sched_finish_task_selection(cpu);
 
 	if (!preserve_need_resched)
 		clear_tsk_need_resched(prev);
