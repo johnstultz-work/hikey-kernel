@@ -685,6 +685,144 @@ TRACE_EVENT(sched_wake_idle_without_ipi,
 	TP_printk("cpu=%d", __entry->cpu)
 );
 
+#ifdef CONFIG_SCHED_PROXY_EXEC
+/**
+ * sched_pe_enqueue_sleeping_task - called when a task is enqueued on wait
+ *				    queue of a sleeping task (mutex owner).
+ * @mutex_owner: pointer to struct task_struct
+ * @blocked:     pointer to struct task_struct
+ */
+TRACE_EVENT(sched_pe_enqueue_sleeping_task,
+
+	TP_PROTO(struct task_struct *mutex_owner, struct task_struct *blocked),
+
+	TP_ARGS(mutex_owner, blocked),
+
+	TP_STRUCT__entry(
+		__array(char,	owner_comm,	TASK_COMM_LEN	)
+		__field(pid_t,	owner_pid			)
+		__field(int,	owner_prio			)
+		__field(int,	owner_cpu			)
+		__array(char,	blocked_comm,	TASK_COMM_LEN	)
+		__field(pid_t,	blocked_pid			)
+		__field(int,	blocked_prio			)
+		__field(int,	blocked_cpu			)
+	),
+
+	TP_fast_assign(
+		strscpy(__entry->owner_comm, mutex_owner->comm, TASK_COMM_LEN);
+		__entry->owner_pid	= mutex_owner->pid;
+		__entry->owner_prio	= mutex_owner->prio; /* XXX SCHED_DEADLINE */
+		__entry->owner_cpu	= task_cpu(mutex_owner);
+
+		strscpy(__entry->blocked_comm, blocked->comm, TASK_COMM_LEN);
+		__entry->blocked_pid	= blocked->pid;
+		__entry->blocked_prio	= blocked->prio; /* XXX SCHED_DEADLINE */
+		__entry->blocked_cpu	= task_cpu(blocked);
+	),
+
+	TP_printk("task=%s pid=%d prio=%d cpu=%d blocked_on owner_task=%s owner_pid=%d owner_prio=%d owner_cpu=%d",
+		  __entry->blocked_comm, __entry->blocked_pid,
+		  __entry->blocked_prio, __entry->blocked_cpu,
+		  __entry->owner_comm, __entry->owner_pid,
+		  __entry->owner_prio, __entry->owner_cpu)
+);
+
+/**
+ * sched_pe_cross_remote_cpu - called when dependency chain crosses remote CPU
+ * @p: pointer to struct task_struct
+ */
+TRACE_EVENT(sched_pe_cross_remote_cpu,
+
+	TP_PROTO(struct task_struct *p),
+
+	TP_ARGS(p),
+
+	TP_STRUCT__entry(
+		__array(char,	comm,	TASK_COMM_LEN	)
+		__field(pid_t,	pid			)
+		__field(int,	prio			)
+		__field(int,	cpu			)
+	),
+
+	TP_fast_assign(
+		strscpy(__entry->comm, p->comm, TASK_COMM_LEN);
+		__entry->pid	= p->pid;
+		__entry->prio	= p->prio; /* XXX SCHED_DEADLINE */
+		__entry->cpu	= task_cpu(p);
+	),
+
+	TP_printk("comm=%s pid=%d prio=%d cpu=%d",
+		  __entry->comm, __entry->pid, __entry->prio, __entry->cpu)
+);
+
+/**
+ * sched_pe_task_is_migrating - called when mutex owner is in migrating state
+ * @p: pointer to struct task_struct
+ */
+TRACE_EVENT(sched_pe_task_is_migrating,
+
+	TP_PROTO(struct task_struct *p),
+
+	TP_ARGS(p),
+
+	TP_STRUCT__entry(
+		__array(char,	comm,	TASK_COMM_LEN	)
+		__field(pid_t,	pid			)
+		__field(int,	prio			)
+	),
+
+	TP_fast_assign(
+		strscpy(__entry->comm, p->comm, TASK_COMM_LEN);
+		__entry->pid		= p->pid;
+		__entry->prio		= p->prio; /* XXX SCHED_DEADLINE */
+	),
+
+	TP_printk("comm=%s pid=%d prio=%d",
+		  __entry->comm, __entry->pid, __entry->prio)
+);
+#endif /* CONFIG_SCHED_PROXY_EXEC */
+
+DECLARE_EVENT_CLASS(sched_task_selection_template,
+
+	TP_PROTO(int cpu),
+
+	TP_ARGS(cpu),
+
+	TP_STRUCT__entry(
+		__field(int,	cpu)
+	),
+
+	TP_fast_assign(
+		__entry->cpu	= cpu;
+	),
+
+	TP_printk("cpu=%d",
+		  __entry->cpu)
+);
+
+/**
+ * sched_start_task_selection - called before selecting next task in
+ *				__schedule()
+ * @cpu: The CPU which will run task selection operation.
+ */
+DEFINE_EVENT(sched_task_selection_template, sched_start_task_selection,
+
+	TP_PROTO(int cpu),
+
+	TP_ARGS(cpu));
+
+/**
+ * sched_finish_task_selection - called after selecting next task in
+ *				 __schedule()
+ * @cpu: The CPU which ran task selection operation.
+ */
+DEFINE_EVENT(sched_task_selection_template, sched_finish_task_selection,
+
+	TP_PROTO(int cpu),
+
+	TP_ARGS(cpu));
+
 /*
  * Following tracepoints are not exported in tracefs and provide hooking
  * mechanisms only for testing and debugging purposes.
