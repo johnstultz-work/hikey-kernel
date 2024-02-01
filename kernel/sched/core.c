@@ -7197,7 +7197,7 @@ find_proxy_task(struct rq *rq, struct task_struct *next, struct rq_flags *rf)
 	int cur_cpu, owner_cpu;
 	struct mutex *mutex;
 	bool curr_in_chain = false;
-
+	int retry = 0;
 	cur_cpu = cpu_of(rq);
 
 	/*
@@ -7206,6 +7206,12 @@ find_proxy_task(struct rq *rq, struct task_struct *next, struct rq_flags *rf)
 	 * TODO: deadlock detection
 	 */
 	for (p = next; task_is_blocked(p); p = owner) {
+		trace_printk("JDB: %s next: %s %d top of loop looking at %s %d\n", __func__, next->comm, next->pid, p->comm, p->pid);
+		if (retry++ > 500) {
+			trace_printk("JDB: ERRR %s next: %s %d stuck in find_proxy_task loop!\n", __func__, next->comm, next->pid);
+			printk("JDB: ERRR %s next: %s %d stuck in find_proxy_task loop!\n", __func__, next->comm, next->pid);
+			BUG();
+		}
 		mutex = p->blocked_on;
 		/* Something changed in the chain, so pick again */
 		if (!mutex)
@@ -7455,7 +7461,7 @@ static void __sched notrace __schedule(unsigned int sched_mode)
 	bool prev_not_proxied;
 	int cpu;
 	bool preserve_need_resched = false;
-
+	int retry = 0;
 	cpu = smp_processor_id();
 	rq = cpu_rq(cpu);
 	prev = rq->curr;
@@ -7506,6 +7512,11 @@ static void __sched notrace __schedule(unsigned int sched_mode)
 
 	trace_sched_start_task_selection(prev, cpu, task_is_blocked(prev));
 pick_again:
+	if (retry++ > 1000){
+		trace_printk("JDB: ERRR %s stuck trying to find next prev: %s %d curr: %s %d selected: %s %d\n", __func__, prev->comm, prev->pid, rq->curr->comm, rq->curr->pid, rq_selected(rq)->comm, rq_selected(rq)->pid);
+		printk("JDB: ERRR %s stuck trying to find next prev: %s %d curr: %s %d selected: %s %d\n", __func__, prev->comm, prev->pid, rq->curr->comm, rq->curr->pid, rq_selected(rq)->comm, rq_selected(rq)->pid);
+		BUG();
+	}
 	next = pick_next_task(rq, rq_selected(rq), &rf);
 	rq_set_selected(rq, next);
 	next->blocked_donor = NULL;
