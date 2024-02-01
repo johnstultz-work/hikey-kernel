@@ -7521,6 +7521,14 @@ pick_again:
 	}
 	trace_sched_finish_task_selection(rq_selected(rq), next, cpu);
 
+	raw_spin_lock(&next->blocked_lock);
+	if (task_is_blocked(next)) {
+		trace_printk("JDB: %s ERRRR: picked %s %d to run (task_is_blocked: %i blocked_on: %p blocked_on_state: %i) is allowed: %i\n", __func__, next->comm, next->pid, task_is_blocked(next), next->blocked_on, next->blocked_on_state, is_cpu_allowed(next, cpu_of(rq)));
+		printk("JDB: %s ERRRR: picked %s %d to run (task_is_blocked: %i blocked_on: %p blocked_on_state: %i) is allowed: %i\n", __func__, next->comm, next->pid, task_is_blocked(next), next->blocked_on, next->blocked_on_state, is_cpu_allowed(next, cpu_of(rq)));
+		BUG();
+	}
+	raw_spin_unlock(&next->blocked_lock);
+
 	if (!preserve_need_resched)
 		clear_tsk_need_resched(prev);
 	clear_preempt_need_resched();
