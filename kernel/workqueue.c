@@ -2553,8 +2553,12 @@ __acquires(&pool->lock)
 	lockdep_copy_map(&lockdep_map, &work->lockdep_map);
 #endif
 	/* ensure we're on the correct CPU */
-	WARN_ON_ONCE(!(pool->flags & POOL_DISASSOCIATED) &&
-		     raw_smp_processor_id() != pool->cpu);
+	if(!(pool->flags & POOL_DISASSOCIATED) &&
+		     raw_smp_processor_id() != pool->cpu) {
+		trace_printk("JDB: ERR: %s %s %d  cpu: %i != pool->cpu:%i\n", __func__, current->comm, current->pid, raw_smp_processor_id(), pool->cpu);
+		printk("JDB: ERR: %s %s %d  cpu: %i != pool->cpu:%i\n", __func__, current->comm, current->pid, raw_smp_processor_id(), pool->cpu);
+		BUG();
+	}
 
 	/* claim and dequeue */
 	debug_work_deactivate(work);
