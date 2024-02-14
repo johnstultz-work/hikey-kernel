@@ -4703,7 +4703,7 @@ int try_to_wake_up(struct task_struct *p, unsigned int state, int wake_flags)
 	if (p->blocked_on_state == BO_WAKING)
 		p->blocked_on_state = BO_RUNNABLE;
 	raw_spin_unlock_irqrestore(&p->blocked_lock, flags);
-	activate_blocked_entities(cpu_rq(cpu), p, wake_flags);
+	activate_blocked_entities(cpu_rq(task_cpu(p)), p, wake_flags);
 out:
 	if (success)
 		ttwu_stat(p, task_cpu(p), wake_flags);
