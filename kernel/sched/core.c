@@ -6639,6 +6639,28 @@ static void try_to_deactivate_task(struct rq *rq, struct task_struct *p,
 	}
 }
 
+#ifdef CONFIG_SCHED_PROXY_EXEC
+DEFINE_PER_CPU(int, flip_flop);
+static struct task_struct *
+find_proxy_task(struct rq *rq, struct task_struct *next, struct rq_flags *rf)
+{
+	/* Every other call, return NULL to force pick-again */
+	int ff = get_cpu_var(flip_flop)++;
+
+	put_cpu_var(flip_flop);
+	if (ff % 2)
+		return NULL;
+	return next;
+}
+#else /* SCHED_PROXY_EXEC */
+static struct task_struct *
+find_proxy_task(struct rq *rq, struct task_struct *next, struct rq_flags *rf)
+{
+	WARN_ONCE(1, "This should never be called in the !SCHED_PROXY_EXEC case\n");
+	return next;
+}
+#endif /* SCHED_PROXY_EXEC */
+
 /*
  * __schedule() is the main scheduler function.
  *
@@ -6734,17 +6756,17 @@ static void __sched notrace __schedule(unsigned int sched_mode)
 		switch_count = &prev->nvcsw;
 	}
 
-	next = pick_next_task(rq, prev, &rf);
+pick_again:
+	next = pick_next_task(rq, rq_selected(rq), &rf);
 	rq_set_selected(rq, next);
-
-	/*
-	 * For testing purposes only, zap the balance callbacks
-	 * and pick again. This mimics the proxy_exec code calling
-	 * pick_next_task potentially multiple times
-	 */
-	zap_balance_callbacks(rq);
-	next = pick_next_task(rq, next, &rf);
-	rq_set_selected(rq, next);
+	if (unlikely(task_is_blocked(next))) {
+		next = find_proxy_task(rq, next, &rf);
+		if (!next) {
+			/* zap the balance_callbacks before picking again */
+			zap_balance_callbacks(rq);
+			goto pick_again;
+		}
+	}
 
 	clear_tsk_need_resched(prev);
 	clear_preempt_need_resched();
