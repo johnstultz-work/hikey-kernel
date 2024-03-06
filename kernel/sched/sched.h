@@ -2345,7 +2345,11 @@ static inline void put_prev_task(struct rq *rq, struct task_struct *prev)
 
 static inline void set_next_task(struct rq *rq, struct task_struct *next)
 {
-	WARN_ON_ONCE(!task_current_selected(rq, next));
+	if (!task_current_selected(rq, next)) {
+		trace_printk("JDB: ERRR %s  %s %d is not selected: %s %d\n", __func__, next->comm, next->pid, rq_selected(rq)->comm, rq_selected(rq)->pid);
+		printk("JDB: ERRR %s  %s %d is not selected: %s %d\n", __func__, next->comm, next->pid, rq_selected(rq)->comm, rq_selected(rq)->pid);
+		BUG();
+	}
 	next->sched_class->set_next_task(rq, next, false);
 }
 
