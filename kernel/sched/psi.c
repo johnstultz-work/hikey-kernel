@@ -898,6 +898,10 @@ static void psi_flags_change(struct task_struct *task, int clear, int set)
 		printk_deferred(KERN_ERR "psi: inconsistent task state! task=%d:%s cpu=%d psi_flags=%x clear=%x set=%x\n",
 				task->pid, task->comm, task_cpu(task),
 				task->psi_flags, clear, set);
+		trace_printk("JDB: ERRR psi: inconsistent task state! task=%s %d cpu=%d psi_flags=%x clear=%x set=%x\n",
+				task->comm, task->pid, task_cpu(task),
+				task->psi_flags, clear, set);
+		BUG();
 		psi_bug = 1;
 	}
 
