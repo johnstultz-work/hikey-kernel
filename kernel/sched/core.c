@@ -2159,6 +2159,7 @@ void activate_task(struct rq *rq, struct task_struct *p, int flags)
 	if (flags & ENQUEUE_MIGRATED)
 		sched_mm_cid_migrate_to(rq, p);
 
+	trace_printk("JDB: %s adding %s %d to rq: %i\n", __func__, p->comm, p->pid, cpu_of(rq));
 	enqueue_task(rq, p, flags);
 
 	p->on_rq = TASK_ON_RQ_QUEUED;
@@ -2168,6 +2169,7 @@ void deactivate_task(struct rq *rq, struct task_struct *p, int flags)
 {
 	p->on_rq = (flags & DEQUEUE_SLEEP) ? 0 : TASK_ON_RQ_MIGRATING;
 
+	trace_printk("JDB: %s removing  %s %d from rq: %i\n", __func__, p->comm, p->pid, cpu_of(rq));
 	dequeue_task(rq, p, flags);
 }
 
@@ -3972,6 +3974,7 @@ static void activate_blocked_waiters(struct rq *target_rq,
 			}
 			raw_spin_unlock_irqrestore(&owner->blocked_lock, flags);
 
+			trace_printk("JDB: %s activating %s %d that was sleeping on %s %d\n", __func__, p->comm, p->pid, owner->comm, owner->pid);
 			do_activate_blocked_waiter(target_rq, p, en_flags);
 			trace_sched_pe_activate_blocked_entity(owner, p);
 
@@ -7071,6 +7074,7 @@ static void proxy_migrate_task(struct rq *rq, struct rq_flags *rf,
 	LIST_HEAD(migrate_list);
 	struct rq *target_rq;
 
+	trace_printk("JDB: %s migrating %s %d from %i to cpu %i\n", __func__, p->comm, p->pid, cpu_of(rq), target_cpu);
 	lockdep_assert_rq_held(rq);
 	target_rq = cpu_rq(target_cpu);
 
@@ -7142,6 +7146,7 @@ static void proxy_enqueue_on_owner(struct rq *rq, struct task_struct *owner,
 	lockdep_assert_rq_held(rq);
 	lockdep_assert_held(&owner->blocked_lock);
 
+	trace_printk("JDB: %s  enqueuing %s %d on sleeping %s %d\n", __func__, next->comm, next->pid, owner->comm, owner->pid);
 	/*
 	 * ttwu_activate() will pick them up and place them on whatever rq
 	 * @owner will run next.
@@ -7239,6 +7244,7 @@ find_proxy_task(struct rq *rq, struct task_struct *next, struct rq_flags *rf)
 
 		owner = __mutex_owner(mutex);
 		if (!owner) {
+			trace_printk("JDB: %s %s %d -> %s %d -> got to a null owner\n", __func__, next->comm, next->pid, p->comm, p->pid);
 			/* If the owner is null, we may have some work to do */
 
 			/* First if p is no longer blocked, just return */
@@ -7275,9 +7281,10 @@ find_proxy_task(struct rq *rq, struct task_struct *next, struct rq_flags *rf)
 			 */
 			raw_spin_unlock(&p->blocked_lock);
 			raw_spin_unlock(&mutex->wait_lock);
-			if (curr_in_chain)
+			if (curr_in_chain) {
+				trace_printk("JDB: %s %s %d -> %s %d -> owner %s %d is on different cpu, but curr_in_chain (%s %d)\n", __func__, next->comm, next->pid, p->comm, p->pid, owner->comm, owner->pid, rq->curr->comm, rq->curr->pid);
 				return proxy_resched_idle(rq, next);
-
+			}
 			proxy_migrate_task(rq, rf, p, owner_cpu);
 			return NULL;
 		}
@@ -7285,6 +7292,7 @@ find_proxy_task(struct rq *rq, struct task_struct *next, struct rq_flags *rf)
 		if (task_on_rq_migrating(owner)) {
 			trace_sched_pe_owner_is_migrating(owner, p);
 
+			trace_printk("JDB: %s %s %d -> %s %d -> owner %s %d is migrating\n", __func__, next->comm, next->pid, p->comm, p->pid, owner->comm, owner->pid);
 			/*
 			 * One of the chain of mutex owners is currently migrating to this
 			 * CPU, but has not yet been enqueued because we are holding the
@@ -7308,6 +7316,8 @@ find_proxy_task(struct rq *rq, struct task_struct *next, struct rq_flags *rf)
 			if (curr_in_chain) {
 				raw_spin_unlock(&p->blocked_lock);
 				raw_spin_unlock(&mutex->wait_lock);
+				trace_printk("JDB: %s %s %d -> %s %d -> owner %s %d is !on_rq, but curr_in_chain (%s %d)\n", __func__, next->comm, next->pid, p->comm, p->pid, owner->comm, owner->pid, rq->curr->comm, rq->curr->pid);
+				
 				return proxy_resched_idle(rq, next);
 			}
 
@@ -7337,10 +7347,13 @@ find_proxy_task(struct rq *rq, struct task_struct *next, struct rq_flags *rf)
 		 * rq lock, double check owner is both on_rq & on this cpu, as
 		 * it might not even be on our RQ still
 		 */
-		if (!(task_on_rq_queued(owner) && task_cpu(owner) == cur_cpu))
+		if (!(task_on_rq_queued(owner) && task_cpu(owner) == cur_cpu)) {
+			trace_printk("JDB: %s %s %d -> %s %d -> owner %s %d is not on this rq (%i vs %i on_rq: %i)\n", __func__, next->comm, next->pid, p->comm, p->pid, owner->comm, owner->pid, task_cpu(owner), cur_cpu, owner->on_rq);
 			goto out;
+		}
 
 		if (owner == p) {
+			trace_printk("JDB: %s %s %d -> %s %d -> owner is self", __func__, next->comm, next->pid, p->comm, p->pid);
 			/*
 			 * It's possible we interleave with mutex_unlock like:
 			 *
@@ -7548,6 +7561,7 @@ pick_again:
 #endif
 
 	if (likely(prev != next)) {
+		trace_printk("JDB: %s switching from %s %d (curr: %s %d) to %s %d (selected: %s %d)\n", __func__, prev->comm, prev->pid, rq->curr->comm, rq->curr->pid, next->comm, next->pid, rq_selected(rq)->comm, rq_selected(rq)->pid);
 		rq->nr_switches++;
 		/*
 		 * RCU users of rcu_dereference(rq->curr) may not see
