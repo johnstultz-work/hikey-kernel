@@ -6853,7 +6853,7 @@ pick_again:
 			zap_balance_callbacks(rq);
 			goto pick_again;
 		}
-		if (next == rq->idle && prev == rq->idle)
+		if (next == rq->idle)
 			preserve_need_resched = true;
 	}
 
