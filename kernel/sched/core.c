@@ -7113,8 +7113,9 @@ static void proxy_migrate_task(struct rq *rq, struct rq_flags *rf,
 		list_del_init(&p->blocked_node);
 
 		activate_task(target_rq, p, 0);
-		check_preempt_curr(target_rq, p, 0);
+	//	check_preempt_curr(target_rq, p, 0);
 	}
+	resched_curr(target_rq);
 	raw_spin_rq_unlock(target_rq);
 	raw_spin_rq_lock(rq);
 	rq_repin_lock(rq, rf);
