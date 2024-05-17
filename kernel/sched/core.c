@@ -3828,7 +3828,7 @@ static void do_activate_task(struct rq *rq, struct task_struct *p, int en_flags)
 			trace_printk("JDB: %s  dropping owner %s %d reference owner usage: %i\n", __func__, owner->comm, owner->pid, refcount_read(&owner->usage));
 			put_task_struct(owner); // put matches get in enqueue_on_sleeping_owner
 		} else {
-			WARN_ON(1);
+			printk_deferred("JDB: %s p(%s %d)->sleeping owner changed on us! Was: %s %d but now is %s %d\n", __func__, p->comm, p->pid, owner->comm, owner->pid, p->sleeping_owner?p->sleeping_owner->comm:"NULL", p->sleeping_owner?p->sleeping_owner->pid:-1);
 		}
 		raw_spin_unlock(&owner->blocked_lock);
 	}
