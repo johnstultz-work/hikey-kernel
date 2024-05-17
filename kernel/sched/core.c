@@ -4282,9 +4282,9 @@ void sched_ttwu_pending(void *arg)
 
 		wake_flags = p->sched_remote_wakeup ? WF_MIGRATED : 0;
 		ttwu_do_activate(rq, p, wake_flags, &rf);
-		rq_unlock(rq, &rf);
+		rq_unlock_irqrestore(rq, &rf);
 		activate_blocked_waiters(rq, p, wake_flags);
-		rq_lock(rq, &rf);
+		rq_lock_irqsave(rq, &rf);
 		update_rq_clock(rq);
 	}
 
