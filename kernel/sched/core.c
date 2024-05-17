@@ -3825,6 +3825,7 @@ static void do_activate_task(struct rq *rq, struct task_struct *p, int en_flags)
 		if (p->sleeping_owner == owner) {
 			list_del_init(&p->blocked_node);
 			p->sleeping_owner = NULL;
+			trace_printk("JDB: %s  dropping owner %s %d reference owner usage: %i\n", __func__, owner->comm, owner->pid, refcount_read(&owner->usage));
 			put_task_struct(owner); // put matches get in enqueue_on_sleeping_owner
 		} else {
 			WARN_ON(1);
@@ -3942,6 +3943,7 @@ static void activate_blocked_waiters(struct rq *target_rq,
 	raw_spin_lock_irqsave(&owner->blocked_lock, flags);
 	if (!list_empty(&owner->blocked_activation_node)) {
 		raw_spin_unlock_irqrestore(&owner->blocked_lock, flags);
+		trace_printk("JDB: %s  starting owner  %s %d is already on a blocked_activation_list!\n", __func__, owner->comm, owner->pid);
 		return;
 	}
 	get_task_struct(owner);
@@ -4139,9 +4141,11 @@ static inline bool proxy_needs_return(struct rq *rq, struct task_struct *p)
 	if (!sched_proxy_exec())
 		return false;
 
+	trace_printk("JDB: %s for %s %d on rq: %i\n", __func__, p->comm, p->pid, cpu_of(rq));
 	raw_spin_lock(&p->blocked_lock);
 	if (get_task_blocked_on(p) && p->blocked_on_state == BO_WAKING) {
 		if (!task_current(rq, p) && (p->wake_cpu != cpu_of(rq))) {
+			trace_printk("JDB: %s deactivating %s %d as wake_cpu: %i != rq: %i\n", __func__, p->comm, p->pid,  p->wake_cpu, cpu_of(rq));
 			if (task_current_selected(rq, p)) {
 				put_prev_task(rq, p);
 				rq_set_selected(rq, rq->idle);
@@ -7104,6 +7108,11 @@ static void proxy_migrate_task(struct rq *rq, struct rq_flags *rf,
 		WARN_ON(p == rq->curr);
 		deactivate_task(rq, p, 0);
 		proxy_set_task_cpu(p, target_cpu);
+
+		if (!list_empty(&p->blocked_node)) {
+			trace_printk("JDB: %s ERRR  p(%s %d)->blocked_node isn't cleared before we use it for migration\n", __func__, p->comm, p->pid);
+			BUG();
+		}
 		/*
 		 * We can abuse blocked_node to migrate the thing,
 		 * because @p was still on the rq.
@@ -7162,7 +7171,12 @@ static void proxy_enqueue_on_owner(struct rq *rq, struct task_struct *owner,
 		 */
 		WARN_ON(next->sleeping_owner);
 		get_task_struct(owner);
+		trace_printk("JDB: %s  got owner %s %d reference owner usage: %i\n", __func__, owner->comm, owner->pid, refcount_read(&owner->usage));
 		next->sleeping_owner = owner;
+		if (!list_empty(&next->blocked_node)){
+			trace_printk("JDB: %s ERRR  next(%s %d)->blocked_node isn't cleared before we queue on sleeping owner: %s %d\n", __func__, next->comm, next->pid, owner->comm, owner->pid);
+			BUG();
+		}
 		list_add(&next->blocked_node, &owner->blocked_head);
 	}
 }
@@ -7321,6 +7335,7 @@ find_proxy_task(struct rq *rq, struct task_struct *next, struct rq_flags *rf)
 				return proxy_resched_idle(rq, next);
 			}
 
+			trace_printk("JDB: %s %s %d -> %s %d -> owner %s %d is !on_rq\n", __func__, next->comm, next->pid, p->comm, p->pid, owner->comm, owner->pid);
 			/*
 			 * If !@owner->on_rq, holding @rq->lock will not pin the task,
 			 * so we cannot drop @mutex->wait_lock until we're sure its a blocked

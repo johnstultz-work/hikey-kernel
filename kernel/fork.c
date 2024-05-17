@@ -966,7 +966,10 @@ static inline void put_signal_struct(struct signal_struct *sig)
 
 void __put_task_struct(struct task_struct *tsk)
 {
-	WARN_ON(!tsk->exit_state);
+	if (!tsk->exit_state) {
+		trace_printk("JDB: ERRR %s on %s %d with no exit_state!\n", __func__, tsk->comm, tsk->pid);
+	}
+	BUG_ON(!tsk->exit_state);
 	WARN_ON(refcount_read(&tsk->usage));
 	WARN_ON(tsk == current);
 
