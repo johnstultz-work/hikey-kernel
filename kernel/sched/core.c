@@ -2763,6 +2763,7 @@ out_unlock:
 void set_cpus_allowed_common(struct task_struct *p, struct affinity_context *ctx)
 {
 	if (ctx->flags & (SCA_MIGRATE_ENABLE | SCA_MIGRATE_DISABLE)) {
+		trace_printk("JDB: %s changes %s %d cpus_ptr\n", __func__, p->comm, p->pid);
 		p->cpus_ptr = ctx->new_mask;
 		return;
 	}
@@ -2795,7 +2796,7 @@ __do_set_cpus_allowed(struct task_struct *p, struct affinity_context *ctx)
 	 *
 	 * XXX do further audits, this smells like something putrid.
 	 */
-	printk("JDB: %s called on %s %d  (wake_cpu currently: %i)\n", __func__, p->comm, p->pid, p->wake_cpu);
+	trace_printk("JDB: %s called on %s %d  (wake_cpu currently: %i)\n", __func__, p->comm, p->pid, p->wake_cpu);
 	if (ctx->flags & SCA_MIGRATE_DISABLE)
 		SCHED_WARN_ON(!p->on_cpu);
 	else
@@ -3246,6 +3247,7 @@ static int __set_cpus_allowed_ptr(struct task_struct *p,
 	struct rq_flags rf;
 	struct rq *rq;
 
+//	trace_printk("JDB: %s called on %s %d\n", __func__, p->comm, p->pid);
 	rq = task_rq_lock(p, &rf);
 	/*
 	 * Masking should be skipped if SCA_USER or any of the SCA_MIGRATE_*
