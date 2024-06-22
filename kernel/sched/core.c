@@ -2662,7 +2662,6 @@ static int migration_cpu_stop(void *data)
 			rq = __migrate_task(rq, &rf, p, arg->dest_cpu);
 		} else {
 			p->wake_cpu = arg->dest_cpu;
-			trace_printk("JDB: %s  %s %d p->wake_cpu set to %i\n", __func__, p->comm, p->pid, p->wake_cpu); 
 		}
 
 		/*
@@ -2763,7 +2762,6 @@ out_unlock:
 void set_cpus_allowed_common(struct task_struct *p, struct affinity_context *ctx)
 {
 	if (ctx->flags & (SCA_MIGRATE_ENABLE | SCA_MIGRATE_DISABLE)) {
-		trace_printk("JDB: %s changes %s %d cpus_ptr\n", __func__, p->comm, p->pid);
 		p->cpus_ptr = ctx->new_mask;
 		return;
 	}
@@ -2796,7 +2794,6 @@ __do_set_cpus_allowed(struct task_struct *p, struct affinity_context *ctx)
 	 *
 	 * XXX do further audits, this smells like something putrid.
 	 */
-	trace_printk("JDB: %s called on %s %d  (wake_cpu currently: %i)\n", __func__, p->comm, p->pid, p->wake_cpu);
 	if (ctx->flags & SCA_MIGRATE_DISABLE)
 		SCHED_WARN_ON(!p->on_cpu);
 	else
@@ -3247,7 +3244,6 @@ static int __set_cpus_allowed_ptr(struct task_struct *p,
 	struct rq_flags rf;
 	struct rq *rq;
 
-//	trace_printk("JDB: %s called on %s %d\n", __func__, p->comm, p->pid);
 	rq = task_rq_lock(p, &rf);
 	/*
 	 * Masking should be skipped if SCA_USER or any of the SCA_MIGRATE_*
@@ -3470,7 +3466,6 @@ static void __migrate_swap_task(struct task_struct *p, int cpu)
 		 * previous CPU our target instead of where it really is.
 		 */
 		p->wake_cpu = cpu;
-		trace_printk("JDB: %s  %s %d p->wake_cpu set to %i\n", __func__, p->comm, p->pid, p->wake_cpu); 
 	}
 }
 
@@ -3863,15 +3858,9 @@ static inline void proxy_set_task_cpu(struct task_struct *p, int cpu)
 	 * __set_task_cpu so we can return the task to where it
 	 * was previously runnable.
 	 */
-	if (!is_cpu_allowed(p, p->wake_cpu)) {
-		printk("JDB: %s ERRR, %s %d p->wake_cpu set to %i but its not something we're allowed to run on!\n", __func__, p->comm, p->pid, p->wake_cpu); 
-		trace_printk("JDB: %s ERRR, %s %d p->wake_cpu set to %i but its not something we're allowed to run on!\n", __func__, p->comm, p->pid, p->wake_cpu); 
-		BUG();
-	}
 	wake_cpu = p->wake_cpu;
 	__set_task_cpu(p, cpu);
 	p->wake_cpu = wake_cpu;
-	trace_printk("JDB: %s  %s %d p->wake_cpu (fixup) set to %i\n", __func__, p->comm, p->pid, p->wake_cpu); 
 }
 #else /* !CONFIG_SMP */
 static inline void proxy_set_task_cpu(struct task_struct *p, int cpu)
@@ -7093,11 +7082,6 @@ static void proxy_migrate_task(struct rq *rq, struct rq_flags *rf,
 	struct rq *target_rq;
 
 	trace_printk("JDB: %s migrating %s %d from %i to cpu %i\n", __func__, p->comm, p->pid, cpu_of(rq), target_cpu);
-	if (cpu_of(rq) == target_cpu) {
-		printk("JDB: %s ERRRR trying to migrate %s %d to cpu %i we're on!\n", __func__, p->comm, p->pid, target_cpu);
-		trace_printk("JDB: %s ERRRR trying to migrate %s %d to cpu %i we're on!\n", __func__, p->comm, p->pid, target_cpu);
-		BUG();
-	}
 	lockdep_assert_rq_held(rq);
 	target_rq = cpu_rq(target_cpu);
 
@@ -9254,7 +9238,6 @@ __sched_setaffinity(struct task_struct *p, struct affinity_context *ctx)
 		goto out_free_cpus_allowed;
 	}
 
-	printk("JDB: %s called on %s %d  (wake_cpu currently: %i)\n", __func__, p->comm, p->pid, p->wake_cpu);
 	cpuset_cpus_allowed(p, cpus_allowed);
 	cpumask_and(new_mask, ctx->new_mask, cpus_allowed);
 

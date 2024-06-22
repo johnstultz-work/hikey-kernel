@@ -1136,7 +1136,6 @@ static bool kick_pool(struct worker_pool *pool)
 		struct work_struct *work = list_first_entry(&pool->worklist,
 						struct work_struct, entry);
 		p->wake_cpu = cpumask_any_distribute(pool->attrs->__pod_cpumask);
-		trace_printk("JDB: %s  %s %d p->wake_cpu set to %i\n", __func__, p->comm, p->pid, p->wake_cpu); 
 		get_work_pwq(work)->stats[PWQ_STAT_REPATRIATED]++;
 	}
 #endif

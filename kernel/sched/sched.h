@@ -2062,7 +2062,6 @@ static inline void __set_task_cpu(struct task_struct *p, unsigned int cpu)
 	smp_wmb();
 	WRITE_ONCE(task_thread_info(p)->cpu, cpu);
 	p->wake_cpu = cpu;
-	trace_printk("JDB: %s  %s %d p->wake_cpu set to %i\n", __func__, p->comm, p->pid, p->wake_cpu); 
 #endif
 }
 
