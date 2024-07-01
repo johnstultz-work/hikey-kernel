@@ -7085,6 +7085,14 @@ static void proxy_migrate_task(struct rq *rq, struct rq_flags *rf,
 	lockdep_assert_rq_held(rq);
 	target_rq = cpu_rq(target_cpu);
 
+	/* We shouldn't be migrated to ourselves*/
+	if (cpu_of(rq) == target_cpu) {
+		printk("JDB: %s ERRRR %s %d  target and current rq are the same? %i vs %i\n", __func__, p->comm, p->pid, cpu_of(rq), target_cpu);
+		trace_printk("JDB: %s ERRRR %s %d  target and current rq are the same? %i vs %i\n", __func__, p->comm, p->pid, cpu_of(rq), target_cpu);
+		BUG();
+
+	}
+
 	/*
 	 * Since we're going to drop @rq, we have to put(@rq_selected) first,
 	 * otherwise we have a reference that no longer belongs to us.
@@ -7291,6 +7299,7 @@ find_proxy_task(struct rq *rq, struct task_struct *next, struct rq_flags *rf)
 		owner_cpu = task_cpu(owner);
 		if (owner_cpu != cur_cpu) {
 			trace_sched_pe_migration(next, owner);
+			trace_printk("JDB: %s %s %d -> %s %d -> owner %s %d is on different cpu\n", __func__, next->comm, next->pid, p->comm, p->pid, owner->comm, owner->pid);
 
 			/*
 			 * @owner can disappear, simply migrate to @owner_cpu and leave that CPU
