@@ -7298,8 +7298,9 @@ find_proxy_task(struct rq *rq, struct task_struct *next, struct rq_flags *rf)
 
 		owner_cpu = task_cpu(owner);
 		if (owner_cpu != cur_cpu) {
+
 			trace_sched_pe_migration(next, owner);
-			trace_printk("JDB: %s %s %d -> %s %d -> owner %s %d is on different cpu\n", __func__, next->comm, next->pid, p->comm, p->pid, owner->comm, owner->pid);
+			trace_printk("JDB: %s %s %d -> %s %d -> owner %s %d is on different cpu (%i)\n", __func__, next->comm, next->pid, p->comm, p->pid, owner->comm, owner->pid, owner_cpu);
 
 			/*
 			 * @owner can disappear, simply migrate to @owner_cpu and leave that CPU
