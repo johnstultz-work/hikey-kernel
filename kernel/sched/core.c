@@ -3824,6 +3824,8 @@ static void do_activate_task(struct rq *rq, struct task_struct *p, int en_flags)
 			list_del_init(&p->blocked_node);
 			p->sleeping_owner = NULL;
 			put_task_struct(owner); // put matches get in enqueue_on_sleeping_owner
+		} else {
+			WARN_ON(1);
 		}
 		raw_spin_unlock(&owner->blocked_lock);
 	}
