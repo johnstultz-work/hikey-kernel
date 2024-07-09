@@ -2217,6 +2217,13 @@ static inline bool task_is_blocked(struct task_struct *p)
 	return !!p->blocked_on && p->blocked_on_state != BO_RUNNABLE;
 }
 
+static inline bool task_is_deadline(struct task_struct *tsk)
+{
+	if (tsk->policy == SCHED_DEADLINE)
+		return true;
+	return false;
+}
+
 static inline int task_on_cpu(struct rq *rq, struct task_struct *p)
 {
 #ifdef CONFIG_SMP
