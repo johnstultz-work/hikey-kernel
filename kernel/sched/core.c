@@ -6554,6 +6554,13 @@ find_proxy_task(struct rq *rq, struct task_struct *next, struct rq_flags *rf)
 			goto out;
 		}
 
+		/* Special case as we cannot proxy with SCHED_DEADLINE */
+		if (task_is_deadline(owner)) {
+			if (!proxy_deactivate(rq, next))
+				next->blocked_on_state = BO_RUNNABLE;
+			goto out;
+		}
+
 		if (task_cpu(owner) != this_cpu) {
 			/* XXX Don't handle migrations yet */
 			if (!proxy_deactivate(rq, next))
