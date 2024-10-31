@@ -4251,13 +4251,13 @@ int try_to_wake_up(struct task_struct *p, unsigned int state, int wake_flags)
 		 *    it disabling IRQs (this allows not taking ->pi_lock).
 		 */
 		SCHED_WARN_ON(p->se.sched_delayed);
+		/* If current is waking up, we know we can run here, so set BO_RUNNBLE */
+		set_blocked_on_runnable(p);
 		if (!ttwu_state_match(p, state, &success))
 			goto out;
 
 		trace_sched_waking(p);
 		ttwu_do_wakeup(p);
-		/* If current is waking up, we know we can run here, so set BO_RUNNBLE */
-		set_blocked_on_runnable(p);
 		goto out;
 	}
 
