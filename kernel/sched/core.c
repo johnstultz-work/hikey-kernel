@@ -6990,22 +6990,21 @@ static void proxy_enqueue_on_owner(struct rq *rq, struct task_struct *owner,
 {
 	lockdep_assert_rq_held(rq);
 	lockdep_assert_held(&owner->blocked_lock);
-
 	/*
 	 * ttwu_activate() will pick them up and place them on whatever rq
 	 * @owner will run next.
 	 */
 	if (!owner->on_rq) {
-		WARN_ON(!donor->on_rq);
-		block_task(rq, donor, 0);
 		/*
 		 * ttwu_do_activate must not have a chance to activate p
 		 * elsewhere before it's fully extricated from its old rq.
 		 */
+		WARN_ON(!donor->on_rq);
 		WARN_ON(donor->sleeping_owner);
 		get_task_struct(owner);
 		donor->sleeping_owner = owner;
 		list_add(&donor->blocked_node, &owner->blocked_head);
+		block_task(rq, donor, 0);
 	}
 }
 
