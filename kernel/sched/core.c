@@ -4567,8 +4567,8 @@ int try_to_wake_up(struct task_struct *p, unsigned int state, int wake_flags)
 
 		ttwu_queue(p, cpu, wake_flags);
 	}
-	activate_blocked_waiters(cpu_rq(task_cpu(p)), p, wake_flags);
 out:
+	activate_blocked_waiters(cpu_rq(task_cpu(p)), p, wake_flags);
 	if (success)
 		ttwu_stat(p, task_cpu(p), wake_flags);
 
