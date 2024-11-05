@@ -776,13 +776,11 @@ struct kmap_ctrl {
 #endif
 };
 
-
-#define BO_RUNNABLE		0x0000
-#define BO_BLOCKED		0x0001
-#define BO_NEEDS_RETURN		0x0002
-
-
-
+enum blocked_on_state {
+	BO_RUNNABLE,
+	BO_BLOCKED,
+	BO_WAKING,
+};
 
 struct task_struct {
 #ifdef CONFIG_THREAD_INFO_IN_TASK
@@ -1204,7 +1202,7 @@ struct task_struct {
 	struct rt_mutex_waiter		*pi_blocked_on;
 #endif
 
-	int 				blocked_on_state;
+	enum blocked_on_state		blocked_on_state;
 	struct mutex			*blocked_on;	/* lock we're blocked on */
 	struct task_struct		*blocked_donor;	/* task that is boosting this task */
 	struct list_head		migration_node;
@@ -2131,14 +2129,15 @@ extern int __cond_resched_rwlock_write(rwlock_t *lock);
 	__cond_resched_rwlock_write(lock);					\
 })
 
-static inline void __set_blocked_on_unblocked(struct task_struct *p)
+static inline void __set_blocked_on_runnable(struct task_struct *p)
 {
 	lockdep_assert_held(&p->blocked_lock);
 
-	p->blocked_on_state &= ~BO_BLOCKED;	
+	if (p->blocked_on_state == BO_WAKING)
+		p->blocked_on_state = BO_RUNNABLE;
 }
 
-static inline void set_blocked_on_unblocked(struct task_struct *p)
+static inline void set_blocked_on_runnable(struct task_struct *p)
 {
 	unsigned long flags;
 
@@ -2146,27 +2145,16 @@ static inline void set_blocked_on_unblocked(struct task_struct *p)
 		return;
 
 	raw_spin_lock_irqsave(&p->blocked_lock, flags);
-	__set_blocked_on_unblocked(p);
+	__set_blocked_on_runnable(p);
 	raw_spin_unlock_irqrestore(&p->blocked_lock, flags);
 }
 
-static inline bool __get_task_bo_needs_return(struct task_struct *p)
+static inline void set_blocked_on_waking(struct task_struct *p)
 {
 	lockdep_assert_held(&p->blocked_lock);
-	return p->blocked_on_state & BO_NEEDS_RETURN;
-}
-static inline bool get_task_bo_needs_return(struct task_struct *p)
-{
-	unsigned long flags;
-	bool ret;
 
-	if (!sched_proxy_exec())
-		return false;
-
-	raw_spin_lock_irqsave(&p->blocked_lock, flags);
-	ret = __get_task_bo_needs_return(p);
-	raw_spin_unlock_irqrestore(&p->blocked_lock, flags);
-	return ret;
+	if (p->blocked_on_state == BO_BLOCKED)
+		p->blocked_on_state = BO_WAKING;
 }
 
 static inline void set_task_blocked_on(struct task_struct *p, struct mutex *m)
@@ -2180,7 +2168,6 @@ static inline void set_task_blocked_on(struct task_struct *p, struct mutex *m)
 	 */
 	WARN_ON((!m && !p->blocked_on) || (m && p->blocked_on));
 
-	BUG_ON(p->blocked_on_state & BO_NEEDS_RETURN);
 	p->blocked_on = m;
 	p->blocked_on_state = m ? BO_BLOCKED : BO_RUNNABLE;
 }

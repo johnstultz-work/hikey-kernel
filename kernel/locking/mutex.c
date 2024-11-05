@@ -675,7 +675,7 @@ __mutex_lock_common(struct mutex *lock, unsigned int state, unsigned int subclas
 		/*
 		 * Re-set blocked_on_state as unlock path set it to WAKING/RUNNABLE
 		 */
-		current->blocked_on_state |= BO_BLOCKED;
+		current->blocked_on_state = BO_BLOCKED;
 		set_current_state(state);
 		/*
 		 * Here we order against unlock; we must either see it change
@@ -692,14 +692,14 @@ __mutex_lock_common(struct mutex *lock, unsigned int state, unsigned int subclas
 			 * mutex_optimistic_spin() can schedule, so  we need to
 			 * release these locks before calling it.
 			 */
-			current->blocked_on_state &= ~BO_BLOCKED;
+			current->blocked_on_state = BO_RUNNABLE;
 			raw_spin_unlock(&current->blocked_lock);
 			raw_spin_unlock_irqrestore(&lock->wait_lock, flags);
 			trace_contention_begin(lock, LCB_F_MUTEX | LCB_F_SPIN);
 			opt_acquired = mutex_optimistic_spin(lock, ww_ctx, &waiter);
 			raw_spin_lock_irqsave(&lock->wait_lock, flags);
 			raw_spin_lock(&current->blocked_lock);
-			current->blocked_on_state |= BO_BLOCKED;
+			current->blocked_on_state = BO_BLOCKED;
 			if (opt_acquired)
 				break;
 			trace_contention_begin(lock, LCB_F_MUTEX);
@@ -966,7 +966,7 @@ static noinline void __sched __mutex_unlock_slowpath(struct mutex *lock, unsigne
 			next_lock = get_task_blocked_on(donor);
 			if (next_lock == lock) {
 				next = donor;
-				__set_blocked_on_unblocked(donor);
+				set_blocked_on_waking(donor);
 				wake_q_add(&wake_q, donor);
 				current->blocked_donor = NULL;
 			}
@@ -988,8 +988,7 @@ static noinline void __sched __mutex_unlock_slowpath(struct mutex *lock, unsigne
 		raw_spin_lock_nested(&next->blocked_lock, SINGLE_DEPTH_NESTING);
 		debug_mutex_wake_waiter(lock, waiter);
 		WARN_ON(get_task_blocked_on(next) != lock);
-
-		__set_blocked_on_unblocked(next);
+		set_blocked_on_waking(next);
 		wake_q_add(&wake_q, next);
 		raw_spin_unlock(&next->blocked_lock);
 	}

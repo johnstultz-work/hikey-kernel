@@ -4026,10 +4026,8 @@ static inline bool proxy_needs_return(struct rq *rq, struct task_struct *p)
 		return false;
 
 	raw_spin_lock(&p->blocked_lock);
-	if (__get_task_bo_needs_return(p)) {
-		WARN_ON(task_current(rq, p));
-		if (p->wake_cpu != cpu_of(rq)) {
-			trace_printk("JDB: %s return migrating %s %d\n", __func__, p->comm,p->pid);
+	if (get_task_blocked_on(p) && p->blocked_on_state == BO_WAKING) {
+		if (!task_current(rq, p) && (p->wake_cpu != cpu_of(rq))) {
 			if (task_current_donor(rq, p)) {
 				put_prev_task(rq, p);
 				rq_set_donor(rq, rq->idle);
@@ -4037,8 +4035,7 @@ static inline bool proxy_needs_return(struct rq *rq, struct task_struct *p)
 			deactivate_task(rq, p, DEQUEUE_NOCLOCK);
 			ret = true;
 		}
-		trace_printk("JDB: %s clearing needs return for %s %d\n", __func__, p->comm, p->pid);
-		p->blocked_on_state &= ~BO_NEEDS_RETURN;
+		__set_blocked_on_runnable(p);
 		resched_curr(rq);
 	}
 	raw_spin_unlock(&p->blocked_lock);
@@ -4181,11 +4178,6 @@ void sched_ttwu_pending(void *arg)
 		if (WARN_ON_ONCE(p->on_cpu))
 			smp_cond_load_acquire(&p->on_cpu, !VAL);
 
-		if (task_cpu(p) != cpu_of(rq)) {
-			printk("JDB: %s ERRR  %s %d (bo: 0x%x) task_cpu: %i but current rq: %i!\n", __func__, p->comm, p->pid, p->blocked_on_state, task_cpu(p), cpu_of(rq));
-			trace_printk("JDB: %s ERRR  %s %d (bo: 0x%x) task_cpu: %i but current rq: %i!\n", __func__, p->comm, p->pid, p->blocked_on_state, task_cpu(p), cpu_of(rq));
-			BUG();
-		}
 		if (WARN_ON_ONCE(task_cpu(p) != cpu_of(rq)))
 			set_task_cpu(p, cpu_of(rq));
 
@@ -4564,8 +4556,7 @@ int try_to_wake_up(struct task_struct *p, unsigned int state, int wake_flags)
 		 */
 		SCHED_WARN_ON(p->se.sched_delayed);
 		/* If current is waking up, we know we can run here, so set BO_RUNNBLE */
-		SCHED_WARN_ON(get_task_bo_needs_return(p));
-		set_blocked_on_unblocked(p);
+		set_blocked_on_runnable(p);
 		if (!ttwu_state_match(p, state, &success))
 			goto out;
 
@@ -4588,7 +4579,8 @@ int try_to_wake_up(struct task_struct *p, unsigned int state, int wake_flags)
 			 * continue on to ttwu_runnable check to force
 			 * proxy_needs_return evaluation
 			 */
-			if (!(READ_ONCE(p->blocked_on_state) & BO_NEEDS_RETURN))
+			if (!(READ_ONCE(p->__state) == TASK_RUNNING &&
+			      READ_ONCE(p->blocked_on_state) == BO_WAKING))
 				break;
 		}
 
@@ -4653,7 +4645,7 @@ int try_to_wake_up(struct task_struct *p, unsigned int state, int wake_flags)
 		 * enqueue, such as ttwu_queue_wakelist().
 		 */
 		WRITE_ONCE(p->__state, TASK_WAKING);
-		set_blocked_on_unblocked(p);
+		set_blocked_on_runnable(p);
 
 		/*
 		 * If the owning (remote) CPU is still in the middle of schedule() with
@@ -7089,15 +7081,6 @@ static void proxy_migrate_task(struct rq *rq, struct rq_flags *rf,
 		WARN_ON(p == rq->curr);
 		deactivate_task(rq, p, 0);
 		proxy_set_task_cpu(p, target_cpu);
-		trace_printk("JDB: %s for  %s %d  (%i->%i) wake_cpu: %i\n", __func__, p->comm, p->pid, cpu_of(rq), target_cpu, p->wake_cpu);
-
-		raw_spin_lock(&p->blocked_lock);
-		if (target_cpu != p->wake_cpu) {
-			trace_printk("JDB: %s setting needs return for %s %d\n", __func__, p->comm, p->pid);
-			p->blocked_on_state |= BO_NEEDS_RETURN;
-		}
-		raw_spin_unlock(&p->blocked_lock);
-
 		/*
 		 * We can abuse blocked_node to migrate the thing,
 		 * because @p was still on the rq.
@@ -7357,7 +7340,7 @@ find_proxy_task(struct rq *rq, struct task_struct *donor, struct rq_flags *rf)
 		 * so we can briefly schedule idle so we release the rq and
 		 * let the wakeup complete.
 		 */
-		if (__get_task_bo_needs_return(p)) {
+		if (p->blocked_on_state == BO_WAKING) {
 			raw_spin_unlock(&p->blocked_lock);
 			raw_spin_unlock(&mutex->wait_lock);
 			return proxy_resched_idle(rq);
@@ -7381,8 +7364,7 @@ needs_return:
 	WARN_ON(!is_cpu_allowed(p, p->wake_cpu));
 	if (p->wake_cpu == this_cpu) {
 		/* We can actually run here fine */
-		trace_printk("JDB: %s clearing needs return for %s %d\n", __func__, p->comm, p->pid);
-		p->blocked_on_state &= ~BO_NEEDS_RETURN;
+		p->blocked_on_state = BO_RUNNABLE;
 		ret = p;
 		goto out;
 	}
@@ -7392,11 +7374,7 @@ needs_return:
 	if (curr_in_chain)
 		return proxy_resched_idle(rq);
 
-	raw_spin_lock(&p->blocked_lock);
-	trace_printk("JDB: %s clearing needs return for %s %d\n", __func__, p->comm, p->pid);
-	p->blocked_on_state &= ~BO_NEEDS_RETURN;
-	raw_spin_unlock(&p->blocked_lock);
-
+	p->blocked_on_state = BO_RUNNABLE;
 	trace_sched_pe_return_migration(p, p->wake_cpu);
 	proxy_migrate_task(rq, rf, p, p->wake_cpu);
 	return NULL;
@@ -7563,11 +7541,6 @@ pick_again:
 		}
 		if (next == rq->idle)
 			preserve_need_resched = true;
-	}
-	if (get_task_bo_needs_return(next)) {
-		printk("JDB: %s ERRR: chose %s %d (donor: %s %d) to run, but it needs return (bo: 0x%x)!\n", __func__, next->comm, next->pid, rq->donor->comm, rq->donor->pid, next->blocked_on_state);
-		trace_printk("JDB: %s ERRR: chose %s %d (donor: %s %d) to run, but it needs return (bo: 0x%x)!\n", __func__, next->comm, next->pid, rq->donor->comm, rq->donor->pid, next->blocked_on_state);
-		BUG();
 	}
 	trace_sched_finish_task_selection(rq->donor, next, cpu);
 picked:
