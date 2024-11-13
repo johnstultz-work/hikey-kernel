@@ -285,7 +285,6 @@ __ww_mutex_die(struct MUTEX *lock, struct MUTEX_WAITER *waiter,
 		raw_spin_lock_nested(&waiter->task->blocked_lock, SINGLE_DEPTH_NESTING);
 #ifndef WW_RT
 		debug_mutex_wake_waiter(lock, waiter);
-#endif
 		/*
 		 * When waking up the task to die, be sure to set the
 		 * blocked_on_state to WAKING. Otherwise we can see
@@ -293,6 +292,7 @@ __ww_mutex_die(struct MUTEX *lock, struct MUTEX_WAITER *waiter,
 		 * resolve.
 		 */
 		WARN_ON(get_task_blocked_on(waiter->task) != lock);
+#endif
 		set_blocked_on_waking(waiter->task);
 		wake_q_add(wake_q, waiter->task);
 		raw_spin_unlock(&waiter->task->blocked_lock);
