@@ -7314,6 +7314,9 @@ find_proxy_task(struct rq *rq, struct task_struct *donor, struct rq_flags *rf)
 			 * So schedule rq->idle so that ttwu_runnable can get the rq lock
 			 * and mark owner as running.
 			 */
+			if (p->blocked_on_state == BO_WAKING)
+				goto needs_return;
+
 			raw_spin_unlock(&p->blocked_lock);
 			raw_spin_unlock(&mutex->wait_lock);
 			return proxy_resched_idle(rq);
@@ -7338,11 +7341,8 @@ find_proxy_task(struct rq *rq, struct task_struct *donor, struct rq_flags *rf)
 		 * so we can briefly schedule idle so we release the rq and
 		 * let the wakeup complete.
 		 */
-		if (p->blocked_on_state == BO_WAKING) {
-			raw_spin_unlock(&p->blocked_lock);
-			raw_spin_unlock(&mutex->wait_lock);
-			return proxy_resched_idle(rq);
-		}
+		if (p->blocked_on_state == BO_WAKING)
+			goto needs_return;
 
 		/*
 		 * OK, now we're absolutely sure @owner is on this
