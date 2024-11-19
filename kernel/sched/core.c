@@ -4018,7 +4018,7 @@ static inline void activate_blocked_waiters(struct rq *target_rq,
 #endif /* CONFIG_SCHED_PROXY_EXEC */
 
 #ifdef CONFIG_SMP
-static inline bool proxy_needs_return(struct rq *rq, struct task_struct *p)
+static inline bool proxy_needs_return(struct rq *rq, struct task_struct *p, bool bo_debug)
 {
 	bool ret = false;
 
@@ -4037,6 +4037,8 @@ static inline bool proxy_needs_return(struct rq *rq, struct task_struct *p)
 		}
 		__set_blocked_on_runnable(p);
 		resched_curr(rq);
+	}else if (bo_debug && p->blocked_on_state == BO_WAKING){
+		printk("JDB: %s (cpu: %i) - %s %d on rq: %i (wake_cpu: %i) was BO_WAKING but failed get_blocked_on: %p  blocked_on_state: %i\n", __func__, raw_smp_processor_id(), p->comm, p->pid, cpu_of(rq), p->wake_cpu, get_task_blocked_on(p), p->blocked_on_state);
 	}
 	raw_spin_unlock(&p->blocked_lock);
 	return ret;
@@ -4126,7 +4128,7 @@ ttwu_do_activate(struct rq *rq, struct task_struct *p, int wake_flags,
  * Returns: %true when the wakeup is done,
  *          %false otherwise.
  */
-static int ttwu_runnable(struct task_struct *p, int wake_flags)
+static int ttwu_runnable(struct task_struct *p, int wake_flags, bool bo_debug)
 {
 	struct rq_flags rf;
 	struct rq *rq;
@@ -4146,12 +4148,14 @@ static int ttwu_runnable(struct task_struct *p, int wake_flags)
 			 */
 			wakeup_preempt(rq, p, wake_flags);
 		}
-		if (proxy_needs_return(rq, p)) {
+		if (proxy_needs_return(rq, p, bo_debug)) {
 			trace_sched_pe_return_migration(p, p->wake_cpu);
 			goto out;
 		}
 		ttwu_do_wakeup(p);
 		ret = 1;
+	} else if (bo_debug && cpu_of(rq) != p->wake_cpu) {
+		printk("JDB: %s (cpu: %i): %s %d was BO_WAKING but on_rq: %i (cpu: %i, wake_cpu: %i), so skipped wakeup\n", __func__, raw_smp_processor_id(), p->comm, p->pid, p->on_rq, cpu_of(rq), p->wake_cpu);
 	}
 out:
 	__task_rq_unlock(rq, &rf);
@@ -4535,10 +4539,21 @@ int try_to_wake_up(struct task_struct *p, unsigned int state, int wake_flags)
 {
 	guard(preempt)();
 	int cpu, success = 0;
-
+	bool bo_wakeup_debug = false;
+	int orig_state;
+	bool was_current = false;
+	bool state_mismatch = false;
+	bool already_runnable = false;
+	bool set_runnable = false;
 	wake_flags |= WF_TTWU;
 
+	orig_state = READ_ONCE(p->blocked_on_state);
+	if (orig_state == BO_WAKING)
+		bo_wakeup_debug = true;
+	trace_printk("JDB: %s (cpu: %i) started on task: %s %d, bo_state: %i\n", __func__, raw_smp_processor_id(), p->comm, p->pid, orig_state);
+
 	if (p == current) {
+		was_current = true;
 		/*
 		 * We're waking current, this means 'p->on_rq' and 'task_cpu(p)
 		 * == smp_processor_id()'. Together this means we can special
@@ -4557,6 +4572,7 @@ int try_to_wake_up(struct task_struct *p, unsigned int state, int wake_flags)
 		SCHED_WARN_ON(p->se.sched_delayed);
 		/* If current is waking up, we know we can run here, so set BO_RUNNBLE */
 		set_blocked_on_runnable(p);
+		set_runnable = true;
 		if (!ttwu_state_match(p, state, &success))
 			goto out;
 
@@ -4580,8 +4596,10 @@ int try_to_wake_up(struct task_struct *p, unsigned int state, int wake_flags)
 			 * proxy_needs_return evaluation
 			 */
 			if (!(READ_ONCE(p->__state) == TASK_RUNNING &&
-			      READ_ONCE(p->blocked_on_state) == BO_WAKING))
+			      READ_ONCE(p->blocked_on_state) == BO_WAKING)) {
+				state_mismatch = true;
 				break;
+			}
 		}
 
 		trace_sched_waking(p);
@@ -4609,8 +4627,10 @@ int try_to_wake_up(struct task_struct *p, unsigned int state, int wake_flags)
 		 * A similar smp_rmb() lives in __task_needs_rq_lock().
 		 */
 		smp_rmb();
-		if (READ_ONCE(p->on_rq) && ttwu_runnable(p, wake_flags))
+		if (READ_ONCE(p->on_rq) && ttwu_runnable(p, wake_flags, bo_wakeup_debug)) {
+			already_runnable = true;
 			break;
+		}
 
 #ifdef CONFIG_SMP
 		/*
@@ -4645,6 +4665,7 @@ int try_to_wake_up(struct task_struct *p, unsigned int state, int wake_flags)
 		 * enqueue, such as ttwu_queue_wakelist().
 		 */
 		WRITE_ONCE(p->__state, TASK_WAKING);
+		set_runnable=true;
 		set_blocked_on_runnable(p);
 
 		/*
@@ -4698,6 +4719,10 @@ int try_to_wake_up(struct task_struct *p, unsigned int state, int wake_flags)
 		ttwu_queue(p, cpu, wake_flags);
 	}
 out:
+	trace_printk("JDB: %s (cpu: %i) on task:  %s %d, bo_state: %i->%i! (success: %i was_curr: %i state_mismatch: %i already_runnable: %i set_runnable: %i)\n", __func__, raw_smp_processor_id(), p->comm, p->pid, orig_state, p->blocked_on_state, success, was_current, state_mismatch, already_runnable, set_runnable );
+	if (0 && bo_wakeup_debug && !set_runnable && p->blocked_on_state == BO_WAKING) {
+		printk("JDB: %s (cpu: %i) on BO_WAKING task:  %s %d, but exiting bo_state: %i! (success: %i was_curr: %i state_mismatch: %i already_runnable: %i \n", __func__, raw_smp_processor_id(), p->comm, p->pid, p->blocked_on_state, success, was_current, state_mismatch, already_runnable );
+	}
 	activate_blocked_waiters(cpu_rq(task_cpu(p)), p, wake_flags);
 	if (success)
 		ttwu_stat(p, task_cpu(p), wake_flags);
@@ -7316,6 +7341,11 @@ find_proxy_task(struct rq *rq, struct task_struct *donor, struct rq_flags *rf)
 			 */
 			raw_spin_unlock(&p->blocked_lock);
 			raw_spin_unlock(&mutex->wait_lock);
+			if (donor == rq->idle) {
+				printk("JDB: ERR %s hit owner == p (%s %d) case from idle\n", __func__, p->comm, p->pid);
+				trace_printk("JDB: ERR %s hit owner == p (%s %d) case from idle\n", __func__, p->comm, p->pid);
+				BUG();
+			}
 			return proxy_resched_idle(rq);
 		}
 		/*
