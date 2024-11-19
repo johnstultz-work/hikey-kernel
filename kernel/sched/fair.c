@@ -8882,6 +8882,7 @@ pick_next_task_fair(struct rq *rq, struct task_struct *prev, struct rq_flags *rf
 	struct task_struct *p;
 	int new_tasks;
 
+	atrace_printk("JDB got here!");
 again:
 	p = pick_task_fair(rq);
 	if (!p)

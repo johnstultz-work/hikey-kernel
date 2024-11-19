@@ -1144,6 +1144,17 @@ int __trace_puts(unsigned long ip, const char *str, int size)
 }
 EXPORT_SYMBOL_GPL(__trace_puts);
 
+#define ATRACE_PRINTK_BUF 256
+int atrace_printk(char *str)
+{
+	char buf[ATRACE_PRINTK_BUF];
+
+	snprintf(buf, ATRACE_PRINTK_BUF, "I|%i|%s", current->pid, str);
+	trace_puts(buf);
+	return 0;
+}
+
+
 /**
  * __trace_bputs - write the pointer to a constant string into trace buffer
  * @ip:	   The address of the caller
