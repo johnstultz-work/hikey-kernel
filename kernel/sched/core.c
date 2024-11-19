@@ -7213,9 +7213,7 @@ find_proxy_task(struct rq *rq, struct task_struct *donor, struct rq_flags *rf)
 				goto out;
 			}
 
-			raw_spin_unlock(&p->blocked_lock);
-			raw_spin_unlock(&mutex->wait_lock);
-			return proxy_resched_idle(rq);
+			goto needs_return;
 		}
 
 		owner_cpu = task_cpu(owner);
