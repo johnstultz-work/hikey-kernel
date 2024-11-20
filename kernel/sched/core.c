@@ -6879,7 +6879,7 @@ proxy_resched_idle(struct rq *rq)
 	set_tsk_need_resched(rq->idle);
 	return rq->idle;
 }
-
+#if 0
 static bool proxy_deactivate(struct rq *rq, struct task_struct *donor)
 {
 	unsigned long state = READ_ONCE(donor->__state);
@@ -6899,6 +6899,7 @@ static bool proxy_deactivate(struct rq *rq, struct task_struct *donor)
 	proxy_resched_idle(rq);
 	return try_to_block_task(rq, donor, state, true);
 }
+#endif
 
 #ifdef CONFIG_SMP
 /*
@@ -7112,7 +7113,7 @@ find_proxy_task(struct rq *rq, struct task_struct *donor, struct rq_flags *rf)
 			return proxy_resched_idle(rq);
 		}
 
-		if (!owner->on_rq) {
+		if (!owner->on_rq || owner->se.sched_delayed) {
 			/*
 			 * rq->curr must not be added to the blocked_head list or else
 			 * ttwu_do_activate could enqueue it elsewhere before it switches
@@ -7144,13 +7145,6 @@ find_proxy_task(struct rq *rq, struct task_struct *donor, struct rq_flags *rf)
 			raw_spin_unlock(&owner->blocked_lock);
 			raw_spin_unlock(&mutex->wait_lock);
 			return NULL; /* retry task selection */
-		}
-
-		if (owner->se.sched_delayed) {
-			/* XXX Don't handle delayed dequeue yet */
-			if (!proxy_deactivate(rq, donor))
-				goto needs_return;
-			goto out;
 		}
 
 		/*
