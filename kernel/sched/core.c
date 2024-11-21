@@ -3698,27 +3698,37 @@ static inline void ttwu_do_wakeup(struct task_struct *p)
 }
 
 #ifdef CONFIG_SCHED_PROXY_EXEC
+static inline void __proxy_remove_from_sleeping_owner(struct task_struct *owner, struct task_struct *p)
+{
+	lockdep_assert_held(&owner->blocked_lock);
+
+	if (p->sleeping_owner == owner) {
+		list_del_init(&p->blocked_node);
+		WRITE_ONCE(p->sleeping_owner, NULL);
+		put_task_struct(owner); // put matches get in enqueue_on_sleeping_owner
+	}
+}
+
+static inline void proxy_remove_from_sleeping_owner(struct task_struct *p)
+{
+	struct task_struct *owner = READ_ONCE(p->sleeping_owner);
+
+	if (owner) {
+		raw_spin_lock(&owner->blocked_lock);
+		__proxy_remove_from_sleeping_owner(owner, p);
+		raw_spin_unlock(&owner->blocked_lock);
+	}
+}
+
 static void do_activate_task(struct rq *rq, struct task_struct *p, int en_flags)
 {
-	struct task_struct *owner;
-
 	if (!sched_proxy_exec()) {
 		activate_task(rq, p, en_flags);
 		return;
 	}
 
 	lockdep_assert_rq_held(rq);
-	owner = READ_ONCE(p->sleeping_owner);
-	if (owner) {
-		raw_spin_lock(&owner->blocked_lock);
-		if (p->sleeping_owner == owner) {
-			list_del_init(&p->blocked_node);
-			p->sleeping_owner = NULL;
-			put_task_struct(owner); // put matches get in enqueue_on_sleeping_owner
-		}
-		raw_spin_unlock(&owner->blocked_lock);
-	}
-
+	proxy_remove_from_sleeping_owner(p);
 	/*
 	 * By calling activate_task with blocked_lock held, we
 	 * order against the find_proxy_task() blocked_task case
@@ -3851,14 +3861,8 @@ static void activate_blocked_waiters(struct rq *target_rq,
 					     struct task_struct,
 					     blocked_node);
 			WARN_ON(p == owner);
-			if (p->sleeping_owner == owner) {
-				list_del_init(&p->blocked_node);
-				p->sleeping_owner = NULL;
-				// put matches get in enqueue_on_sleeping_owner
-				put_task_struct(owner);
-			} else {
-				WARN_ON(1);
-			}
+			WARN_ON(p->sleeping_owner != owner);
+			__proxy_remove_from_sleeping_owner(owner, p);
 			raw_spin_unlock_irqrestore(&owner->blocked_lock, flags);
 
 			do_activate_blocked_waiter(target_rq, p, en_flags);
@@ -3877,6 +3881,10 @@ static void activate_blocked_waiters(struct rq *target_rq,
 	}
 }
 #else /* !CONFIG_SCHED_PROXY_EXEC */
+static inline void proxy_remove_from_sleeping_owner(struct task_struct *p)
+{
+}
+
 static inline void do_activate_task(struct rq *rq, struct task_struct *p,
 				    int en_flags)
 {
@@ -4008,8 +4016,10 @@ static int ttwu_runnable(struct task_struct *p, int wake_flags)
 	rq = __task_rq_lock(p, &rf);
 	if (task_on_rq_queued(p)) {
 		update_rq_clock(rq);
-		if (p->se.sched_delayed)
+		if (p->se.sched_delayed) {
+			proxy_remove_from_sleeping_owner(p);
 			enqueue_task(rq, p, ENQUEUE_NOCLOCK | ENQUEUE_DELAYED);
+		}
 		if (!task_on_cpu(rq, p)) {
 			/*
 			 * When on_rq && !on_cpu the task is preempted, see if
@@ -4564,7 +4574,6 @@ int try_to_wake_up(struct task_struct *p, unsigned int state, int wake_flags)
 #else
 		cpu = task_cpu(p);
 #endif /* CONFIG_SMP */
-
 		ttwu_queue(p, cpu, wake_flags);
 	}
 out:
@@ -6995,10 +7004,11 @@ static void proxy_enqueue_on_owner(struct rq *rq, struct task_struct *owner,
 	 * ttwu_activate() will pick them up and place them on whatever rq
 	 * @owner will run next.
 	 */
+	WARN_ON(p == owner);
 	WARN_ON(!p->on_rq);
 	WARN_ON(p->sleeping_owner);
 	get_task_struct(owner);
-	p->sleeping_owner = owner;
+	WRITE_ONCE(p->sleeping_owner, owner);
 	/*
 	 * ttwu_do_activate must not have a chance to activate p
 	 * elsewhere before it's fully extricated from its old rq.
